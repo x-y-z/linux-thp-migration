@@ -152,6 +152,11 @@ static inline bool is_huge_zero_pmd(pmd_t pmd)
 struct page *get_huge_zero_page(void);
 void put_huge_zero_page(void);
 
+static inline bool thp_migration_supported(void)
+{
+	return IS_ENABLED(CONFIG_ARCH_ENABLE_THP_MIGRATION);
+}
+
 #else /* CONFIG_TRANSPARENT_HUGEPAGE */
 #define HPAGE_PMD_SHIFT ({ BUILD_BUG(); 0; })
 #define HPAGE_PMD_MASK ({ BUILD_BUG(); 0; })
@@ -216,6 +221,11 @@ static inline struct page *follow_devmap_pmd(struct vm_area_struct *vma,
 		unsigned long addr, pmd_t *pmd, int flags)
 {
 	return NULL;
+}
+
+static inline bool thp_migration_supported(void)
+{
+	return false;
 }
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
