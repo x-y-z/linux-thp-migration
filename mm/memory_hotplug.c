@@ -1527,6 +1527,14 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 			if (isolate_huge_page(page, &source))
 				move_pages -= 1 << compound_order(head);
 			continue;
+		} else if (thp_migration_supported() && PageTransHuge(page)) {
+			struct page *head = compound_head(page);
+
+			pfn = page_to_pfn(head) + (1<<compound_order(head)) - 1;
+			if (compound_order(head) > PFN_SECTION_SHIFT) {
+				ret = -EBUSY;
+				break;
+			}
 		}
 
 		if (!get_page_unless_zero(page))
