@@ -1437,6 +1437,13 @@ int unpoison_memory(unsigned long pfn)
 		return 0;
 	}
 
+	/*
+	 * Soft-offlined pages might stay in PCP list because it's freed via
+	 * putback_lru_page(), and such pages shouldn't be unpoisoned because
+	 * it could cause list corruption. So let's drain pages to avoid that.
+	 */
+	shake_page(page, 0);
+
 	nr_pages = 1 << compound_order(page);
 
 	if (!get_hwpoison_page(p)) {
@@ -1680,7 +1687,8 @@ static int __soft_offline_page(struct page *page, int flags)
 				pfn, ret, page->flags);
 			if (ret > 0)
 				ret = -EIO;
-		}
+		} else if (!TestSetPageHWPoison(page))
+			num_poisoned_pages_inc();
 	} else {
 		pr_info("soft offline: %#lx: isolation failed: %d, page count %d, type %lx\n",
 			pfn, ret, page_count(page), page->flags);
