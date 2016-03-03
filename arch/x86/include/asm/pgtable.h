@@ -530,6 +530,17 @@ static inline int pmd_present(pmd_t pmd)
 	return pmd_flags(pmd) & (_PAGE_PRESENT | _PAGE_PROTNONE | _PAGE_PSE);
 }
 
+/*
+ * Unlike pmd_present(), __pmd_present() checks only _PAGE_PRESENT bit.
+ * Combined with is_migration_entry(), this routine is used to detect pmd
+ * migration entries. To make it work fine, callers should make sure that
+ * pmd_trans_huge() returns true beforehand.
+ */
+static inline int __pmd_present(pmd_t pmd)
+{
+	return pmd_flags(pmd) & _PAGE_PRESENT;
+}
+
 #ifdef CONFIG_NUMA_BALANCING
 /*
  * These work without NUMA balancing but the kernel does not care. See the

@@ -3522,3 +3522,80 @@ static int __init split_huge_pages_debugfs(void)
 }
 late_initcall(split_huge_pages_debugfs);
 #endif
+
+#ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
+int set_pmd_migration_entry(struct page *page, struct mm_struct *mm,
+				unsigned long addr)
+{
+	pte_t *pte;
+	pmd_t *pmd;
+	pmd_t pmdval;
+	pmd_t pmdswp;
+	swp_entry_t entry;
+	spinlock_t *ptl;
+
+	mmu_notifier_invalidate_range_start(mm, addr, addr + HPAGE_PMD_SIZE);
+	if (!page_check_address_transhuge(page, mm, addr, &pmd, &pte, &ptl))
+		goto out;
+	if (pte)
+		goto out;
+	pmdval = pmdp_huge_get_and_clear(mm, addr, pmd);
+	entry = make_migration_entry(page, pmd_write(pmdval));
+	pmdswp = swp_entry_to_pmd(entry);
+	pmdswp = pmd_mkhuge(pmdswp);
+	set_pmd_at(mm, addr, pmd, pmdswp);
+	page_remove_rmap(page, true);
+	put_page(page);
+	spin_unlock(ptl);
+out:
+	mmu_notifier_invalidate_range_end(mm, addr, addr + HPAGE_PMD_SIZE);
+	return SWAP_AGAIN;
+}
+
+int remove_migration_pmd(struct page *new, struct vm_area_struct *vma,
+			unsigned long addr, void *old)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	spinlock_t *ptl;
+	pgd_t *pgd;
+	pud_t *pud;
+	pmd_t *pmd;
+	pmd_t pmde;
+	swp_entry_t entry;
+	unsigned long mmun_start = addr & HPAGE_PMD_MASK;
+	unsigned long mmun_end = mmun_start + HPAGE_PMD_SIZE;
+
+	pgd = pgd_offset(mm, addr);
+	if (!pgd_present(*pgd))
+		goto out;
+	pud = pud_offset(pgd, addr);
+	if (!pud_present(*pud))
+		goto out;
+	pmd = pmd_offset(pud, addr);
+	if (!pmd)
+		goto out;
+	ptl = pmd_lock(mm, pmd);
+	pmde = *pmd;
+	if (!is_pmd_migration_entry(pmde))
+		goto unlock_ptl;
+	entry = pmd_to_swp_entry(pmde);
+	if (migration_entry_to_page(entry) != old)
+		goto unlock_ptl;
+	get_page(new);
+	pmde = mk_huge_pmd(new, vma->vm_page_prot);
+	if (is_write_migration_entry(entry))
+		pmde = maybe_pmd_mkwrite(pmde, vma);
+	flush_cache_range(vma, mmun_start, mmun_end);
+	page_add_anon_rmap(new, vma, mmun_start, true);
+	pmdp_huge_clear_flush_notify(vma, mmun_start, pmd);
+	set_pmd_at(mm, mmun_start, pmd, pmde);
+	flush_tlb_range(vma, mmun_start, mmun_end);
+	if (vma->vm_flags & VM_LOCKED)
+		mlock_vma_page(new);
+	update_mmu_cache_pmd(vma, addr, pmd);
+unlock_ptl:
+	spin_unlock(ptl);
+out:
+	return SWAP_AGAIN;
+}
+#endif
