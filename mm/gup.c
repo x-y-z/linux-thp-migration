@@ -272,6 +272,11 @@ struct page *follow_page_mask(struct vm_area_struct *vma,
 		spin_unlock(ptl);
 		return follow_page_pte(vma, address, pmd, flags);
 	}
+	if (is_pmd_migration_entry(*pmd)) {
+		spin_unlock(ptl);
+		return no_page_table(vma, flags);
+	}
+
 	if (flags & FOLL_SPLIT) {
 		int ret;
 		page = pmd_page(*pmd);
@@ -1358,6 +1363,9 @@ static int gup_pmd_range(pud_t pud, unsigned long addr, unsigned long end,
 			return 0;
 
 		if (unlikely(pmd_trans_huge(pmd) || pmd_huge(pmd))) {
+			if (unlikely(is_pmd_migration_entry(pmd)))
+				return 0;
+
 			/*
 			 * NUMA hinting faults need to be handled in the GUP
 			 * slowpath for accounting purposes and so that they

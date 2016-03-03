@@ -3440,6 +3440,11 @@ static int __handle_mm_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 		if (pmd_trans_huge(orig_pmd) || pmd_devmap(orig_pmd)) {
 			unsigned int dirty = flags & FAULT_FLAG_WRITE;
 
+			if (unlikely(is_pmd_migration_entry(orig_pmd))) {
+				pmd_migration_entry_wait(mm, pmd);
+				return 0;
+			}
+
 			if (pmd_protnone(orig_pmd))
 				return do_huge_pmd_numa_page(mm, vma, address,
 							     orig_pmd, pmd);

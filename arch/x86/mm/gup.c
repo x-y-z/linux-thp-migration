@@ -10,6 +10,7 @@
 #include <linux/highmem.h>
 #include <linux/swap.h>
 #include <linux/memremap.h>
+#include <linux/swapops.h>
 
 #include <asm/mmu_context.h>
 #include <asm/pgtable.h>
@@ -225,6 +226,8 @@ static int gup_pmd_range(pud_t pud, unsigned long addr, unsigned long end,
 		if (pmd_none(pmd))
 			return 0;
 		if (unlikely(pmd_large(pmd) || !pmd_present(pmd))) {
+			if (unlikely(is_pmd_migration_entry(pmd)))
+				return 0;
 			/*
 			 * NUMA hinting faults need to be handled in the GUP
 			 * slowpath for accounting purposes and so that they
