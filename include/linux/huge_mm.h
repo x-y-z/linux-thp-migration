@@ -189,6 +189,13 @@ static inline int hpage_nr_pages(struct page *page)
 	return 1;
 }
 
+static inline int hpage_order(struct page *page)
+{
+	if (unlikely(PageTransHuge(page)))
+		return HPAGE_PMD_ORDER;
+	return 0;
+}
+
 struct page *follow_devmap_pmd(struct vm_area_struct *vma, unsigned long addr,
 		pmd_t *pmd, int flags);
 struct page *follow_devmap_pud(struct vm_area_struct *vma, unsigned long addr,
@@ -233,6 +240,7 @@ static inline bool thp_migration_supported(void)
 #define HPAGE_PUD_SIZE ({ BUILD_BUG(); 0; })
 
 #define hpage_nr_pages(x) 1
+#define hpage_order(x) 0
 
 #define transparent_hugepage_enabled(__vma) 0
 

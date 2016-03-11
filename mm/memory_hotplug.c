@@ -1569,6 +1569,7 @@ static struct page *new_node_page(struct page *page, unsigned long private,
 	int nid = page_to_nid(page);
 	nodemask_t nmask = node_states[N_MEMORY];
 	struct page *new_page = NULL;
+	unsigned int order = 0;
 
 	/*
 	 * TODO: allocate a destination hugepage from a nearest neighbor node,
@@ -1579,6 +1580,11 @@ static struct page *new_node_page(struct page *page, unsigned long private,
 		return alloc_huge_page_node(page_hstate(compound_head(page)),
 					next_node_in(nid, nmask));
 
+	if (thp_migration_supported() && PageTransHuge(page)) {
+		order = hpage_order(page);
+		gfp_mask |= GFP_TRANSHUGE;
+	}
+
 	node_clear(nid, nmask);
 
 	if (PageHighMem(page)
@@ -1586,11 +1592,14 @@ static struct page *new_node_page(struct page *page, unsigned long private,
 		gfp_mask |= __GFP_HIGHMEM;
 
 	if (!nodes_empty(nmask))
-		new_page = __alloc_pages_nodemask(gfp_mask, 0,
+		new_page = __alloc_pages_nodemask(gfp_mask, order,
 					node_zonelist(nid, gfp_mask), &nmask);
 	if (!new_page)
-		new_page = __alloc_pages(gfp_mask, 0,
+		new_page = __alloc_pages(gfp_mask, order,
 					node_zonelist(nid, gfp_mask));
+
+	if (new_page && order == hpage_order(page))
+		prep_transhuge_page(new_page);
 
 	return new_page;
 }
@@ -1621,7 +1630,9 @@ do_migrate_range(unsigned long start_pfn, unsigned long end_pfn)
 			if (isolate_huge_page(page, &source))
 				move_pages -= 1 << compound_order(head);
 			continue;
-		}
+		} else if (thp_migration_supported() && PageTransHuge(page))
+			pfn = page_to_pfn(compound_head(page))
+				+ hpage_nr_pages(page) - 1;
 
 		if (!get_page_unless_zero(page))
 			continue;
