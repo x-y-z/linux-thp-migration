@@ -244,7 +244,7 @@ static void update_pageblock_skip(struct compact_control *cc,
 	if (migrate_scanner) {
 		if (pfn > zone->compact_cached_migrate_pfn[0])
 			zone->compact_cached_migrate_pfn[0] = pfn;
-		if (cc->mode != MIGRATE_ASYNC &&
+		if (!(cc->mode & MIGRATE_ASYNC) &&
 		    pfn > zone->compact_cached_migrate_pfn[1])
 			zone->compact_cached_migrate_pfn[1] = pfn;
 	} else {
@@ -277,7 +277,7 @@ static void update_pageblock_skip(struct compact_control *cc,
 static bool compact_trylock_irqsave(spinlock_t *lock, unsigned long *flags,
 						struct compact_control *cc)
 {
-	if (cc->mode == MIGRATE_ASYNC) {
+	if (cc->mode & MIGRATE_ASYNC) {
 		if (!spin_trylock_irqsave(lock, *flags)) {
 			cc->contended = COMPACT_CONTENDED_LOCK;
 			return false;
@@ -318,7 +318,7 @@ static bool compact_unlock_should_abort(spinlock_t *lock,
 	}
 
 	if (need_resched()) {
-		if (cc->mode == MIGRATE_ASYNC) {
+		if (cc->mode & MIGRATE_ASYNC) {
 			cc->contended = COMPACT_CONTENDED_SCHED;
 			return true;
 		}
@@ -341,7 +341,7 @@ static inline bool compact_should_abort(struct compact_control *cc)
 {
 	/* async compaction aborts if contended */
 	if (need_resched()) {
-		if (cc->mode == MIGRATE_ASYNC) {
+		if (cc->mode & MIGRATE_ASYNC) {
 			cc->contended = COMPACT_CONTENDED_SCHED;
 			return true;
 		}
@@ -651,7 +651,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 	 */
 	while (unlikely(too_many_isolated(zone))) {
 		/* async migration should just abort */
-		if (cc->mode == MIGRATE_ASYNC)
+		if (cc->mode & MIGRATE_ASYNC)
 			return 0;
 
 		congestion_wait(BLK_RW_ASYNC, HZ/10);
@@ -663,7 +663,7 @@ isolate_migratepages_block(struct compact_control *cc, unsigned long low_pfn,
 	if (compact_should_abort(cc))
 		return 0;
 
-	if (cc->direct_compaction && (cc->mode == MIGRATE_ASYNC)) {
+	if (cc->direct_compaction && (cc->mode & MIGRATE_ASYNC)) {
 		skip_on_failure = true;
 		next_skip_pfn = block_end_pfn(low_pfn, cc->order);
 	}
@@ -1141,7 +1141,7 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 	struct page *page;
 	const isolate_mode_t isolate_mode =
 		(sysctl_compact_unevictable_allowed ? ISOLATE_UNEVICTABLE : 0) |
-		(cc->mode == MIGRATE_ASYNC ? ISOLATE_ASYNC_MIGRATE : 0);
+		((cc->mode & MIGRATE_ASYNC) ? ISOLATE_ASYNC_MIGRATE : 0);
 
 	/*
 	 * Start at where we last stopped, or beginning of the zone as
@@ -1187,7 +1187,7 @@ static isolate_migrate_t isolate_migratepages(struct zone *zone,
 		 * Async compaction is optimistic to see if the minimum amount
 		 * of work satisfies the allocation.
 		 */
-		if (cc->mode == MIGRATE_ASYNC &&
+		if ((cc->mode & MIGRATE_ASYNC) &&
 		    !migrate_async_suitable(get_pageblock_migratetype(page)))
 			continue;
 
@@ -1413,7 +1413,7 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 	unsigned long start_pfn = zone->zone_start_pfn;
 	unsigned long end_pfn = zone_end_pfn(zone);
 	const int migratetype = gfpflags_to_migratetype(cc->gfp_mask);
-	const bool sync = cc->mode != MIGRATE_ASYNC;
+	const bool sync = !(cc->mode & MIGRATE_ASYNC);
 
 	ret = compaction_suitable(zone, cc->order, cc->alloc_flags,
 							cc->classzone_idx);
@@ -1503,7 +1503,7 @@ static enum compact_result compact_zone(struct zone *zone, struct compact_contro
 			 * order-aligned block, so skip the rest of it.
 			 */
 			if (cc->direct_compaction &&
-						(cc->mode == MIGRATE_ASYNC)) {
+						(cc->mode & MIGRATE_ASYNC)) {
 				cc->migrate_pfn = block_end_pfn(
 						cc->migrate_pfn - 1, cc->order);
 				/* Draining pcplists is useless in this case */
@@ -1672,7 +1672,7 @@ enum compact_result try_to_compact_pages(gfp_t gfp_mask, unsigned int order,
 			goto break_loop;
 		}
 
-		if (mode != MIGRATE_ASYNC && (status == COMPACT_COMPLETE ||
+		if ((mode & MIGRATE_ASYNC) && (status == COMPACT_COMPLETE ||
 					status == COMPACT_PARTIAL_SKIPPED)) {
 			/*
 			 * We think that allocation won't succeed in this zone

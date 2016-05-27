@@ -3270,8 +3270,9 @@ should_compact_retry(struct alloc_context *ac, int order, int alloc_flags,
 	 * failure could be caused by weak migration mode.
 	 */
 	if (compaction_failed(compact_result)) {
-		if (*migrate_mode == MIGRATE_ASYNC) {
-			*migrate_mode = MIGRATE_SYNC_LIGHT;
+		if (*migrate_mode & MIGRATE_ASYNC) {
+			*migrate_mode &= ~MIGRATE_ASYNC;
+			*migrate_mode |= MIGRATE_SYNC_LIGHT;
 			return true;
 		}
 		return false;
