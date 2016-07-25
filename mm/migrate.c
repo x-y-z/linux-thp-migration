@@ -516,6 +516,9 @@ static void __copy_gigantic_page(struct page *dst, struct page *src,
 		if (mode & MIGRATE_DMA)
 			rc = copy_page_dma(dst, src, 1);
 
+		if (rc && (mode & MIGRATE_MT))
+			rc = copy_page_mt(dst, src, 1);
+
 		if (rc)
 			copy_highpage(dst, src);
 
@@ -550,6 +553,9 @@ static void copy_huge_page(struct page *dst, struct page *src,
 	if (mode & MIGRATE_DMA)
 		rc = copy_page_dma(dst, src, nr_pages);
 
+	if (rc && (mode & MIGRATE_MT))
+		rc = copy_page_mt(dst, src, nr_pages);
+
 	if (rc)
 		for (i = 0; i < nr_pages; i++) {
 			cond_resched();
@@ -571,6 +577,9 @@ void migrate_page_copy(struct page *newpage, struct page *page,
 	else {
 		if (mode & MIGRATE_DMA)
 			rc = copy_page_dma(newpage, page, 1);
+
+		if (rc && (mode & MIGRATE_MT))
+			rc = copy_page_mt(newpage, page, 1);
 
 		if (rc)
 			copy_highpage(newpage, page);
@@ -1302,14 +1311,17 @@ static struct page *new_page_node(struct page *p, unsigned long private,
 static int do_move_page_to_node_array(struct mm_struct *mm,
 				      struct page_to_node *pm,
 				      int migrate_all,
-					  int migrate_use_dma)
+					  int migrate_use_dma,
+					  int migrate_use_mt)
 {
 	int err;
 	struct page_to_node *pp;
 	LIST_HEAD(pagelist);
 	enum migrate_mode mode = MIGRATE_SYNC;
 
-	if (migrate_use_dma)
+	if (migrate_use_mt)
+		mode |= MIGRATE_MT;
+	else if (migrate_use_dma)
 		mode |= MIGRATE_DMA;
 
 	down_read(&mm->mmap_sem);
@@ -1466,7 +1478,8 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 		/* Migrate this chunk */
 		err = do_move_page_to_node_array(mm, pm,
 						 flags & MPOL_MF_MOVE_ALL,
-						 flags & MPOL_MF_MOVE_DMA);
+						 flags & MPOL_MF_MOVE_DMA,
+						 flags & MPOL_MF_MOVE_MT);
 		if (err < 0)
 			goto out_pm;
 
@@ -1573,7 +1586,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
 	nodemask_t task_nodes;
 
 	/* Check flags */
-	if (flags & ~(MPOL_MF_MOVE|MPOL_MF_MOVE_ALL|MPOL_MF_MOVE_DMA))
+	if (flags & ~(MPOL_MF_MOVE|MPOL_MF_MOVE_ALL|MPOL_MF_MOVE_DMA|MPOL_MF_MOVE_MT))
 		return -EINVAL;
 
 	if ((flags & MPOL_MF_MOVE_ALL) && !capable(CAP_SYS_NICE))
