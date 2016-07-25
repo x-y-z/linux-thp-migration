@@ -99,6 +99,9 @@
 extern int use_all_dma_chans;
 extern int limit_dma_chans;
 
+extern int use_mt_copy;
+extern int limit_mt_num;
+
 /* External variables not in a header file. */
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
@@ -1367,6 +1370,23 @@ static struct ctl_table vm_table[] = {
 		.procname	= "limit_dma_chans",
 		.data		= &limit_dma_chans,
 		.maxlen		= sizeof(limit_dma_chans),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+		.extra1		= &zero,
+	 },
+	 {
+		.procname	= "use_mt_copy",
+		.data		= &use_mt_copy,
+		.maxlen		= sizeof(use_mt_copy),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+		.extra1		= &zero,
+		.extra2		= &one,
+	 },
+	 {
+		.procname	= "limit_mt_num",
+		.data		= &limit_mt_num,
+		.maxlen		= sizeof(limit_mt_num),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 		.extra1		= &zero,

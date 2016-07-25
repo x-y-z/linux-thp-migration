@@ -8,6 +8,9 @@
 #include <linux/highmem.h>
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
+#include <linux/workqueue.h>
+#include <linux/slab.h>
+#include <linux/freezer.h>
 
 #define NUM_AVAIL_DMA_CHAN 16
 
@@ -15,9 +18,12 @@
 int use_all_dma_chans = 0;
 int limit_dma_chans = NUM_AVAIL_DMA_CHAN;
 
+int use_mt_copy = 0;
+int limit_mt_num = 8;
 
 struct dma_chan *copy_chan[NUM_AVAIL_DMA_CHAN] = {0};
 struct dma_device *copy_dev[NUM_AVAIL_DMA_CHAN] = {0};
+
 
 
 
@@ -86,6 +92,8 @@ int sysctl_dma_page_migration(struct ctl_table *table, int write,
 }
 
 #endif
+
+/* ======================== DMA copy page ======================== */
 
 static int copy_page_dma_once(struct page *to, struct page *from, int nr_pages)
 {
@@ -283,6 +291,8 @@ unmap_dma:
 	return ret_val;
 }
 
+
+
 int copy_page_dma(struct page *to, struct page *from, int nr_pages)
 {
 	BUG_ON(hpage_nr_pages(from) != nr_pages);
@@ -293,4 +303,84 @@ int copy_page_dma(struct page *to, struct page *from, int nr_pages)
 	} 
 
 	return copy_page_dma_always(to, from, nr_pages);
+}
+
+/* ======================== multi-threaded copy page ======================== */
+
+struct copy_page_info {
+	struct work_struct copy_page_work;
+	char *to;
+	char *from;
+	unsigned long chunk_size;
+};
+
+static void copy_page_routine(char *vto, char *vfrom, 
+	unsigned long chunk_size)
+{
+	memcpy(vto, vfrom, chunk_size);
+}
+
+static void copy_page_work_queue_thread(struct work_struct *work)
+{
+	struct copy_page_info *my_work = (struct copy_page_info*)work;
+
+	copy_page_routine(my_work->to,
+					  my_work->from,
+					  my_work->chunk_size);
+}
+
+int copy_page_mt(struct page *to, struct page *from, int nr_pages)
+{
+	int total_mt_num = limit_mt_num;
+	int to_node = page_to_nid(to);
+	int i;
+	struct copy_page_info *work_items;
+	char *vto, *vfrom;
+	unsigned long chunk_size;
+	const struct cpumask *per_node_cpumask = cpumask_of_node(to_node);
+	int cpu_id_list[32] = {0};
+	int cpu;
+
+	if (!use_mt_copy)
+		return -1;
+
+	work_items = kzalloc(sizeof(struct copy_page_info)*total_mt_num, 
+						 GFP_KERNEL);
+	if (!work_items)
+		return -ENOMEM;
+
+	i = 0;
+	for_each_cpu(cpu, per_node_cpumask) {
+		if (i >= total_mt_num)
+			break;
+		cpu_id_list[i] = cpu;
+		++i;
+	}
+
+	/* XXX: assume no highmem  */
+	vfrom = kmap_atomic(from);
+	vto = kmap_atomic(to);
+	chunk_size = PAGE_SIZE*nr_pages / total_mt_num;
+
+	for (i = 0; i < total_mt_num; ++i) {
+		INIT_WORK((struct work_struct *)&work_items[i], copy_page_work_queue_thread);
+
+		work_items[i].to = vto + i * chunk_size;
+		work_items[i].from = vfrom + i * chunk_size;
+		work_items[i].chunk_size = chunk_size;
+
+		queue_work_on(cpu_id_list[i], 
+					  system_highpri_wq, 
+					  (struct work_struct *)&work_items[i]);
+	}
+
+	/* Wait until it finishes  */
+	flush_workqueue(system_highpri_wq);
+
+	kunmap_atomic(vto);
+	kunmap_atomic(vfrom);
+
+	kfree(work_items);
+
+	return 0;
 }
