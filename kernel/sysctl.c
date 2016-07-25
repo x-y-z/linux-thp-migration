@@ -97,6 +97,7 @@
 
 #if defined(CONFIG_SYSCTL)
 
+
 /* External variables not in a header file. */
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
