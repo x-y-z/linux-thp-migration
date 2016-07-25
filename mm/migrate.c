@@ -503,15 +503,21 @@ int migrate_huge_page_move_mapping(struct address_space *mapping,
  * specialized.
  */
 static void __copy_gigantic_page(struct page *dst, struct page *src,
-				int nr_pages)
+				int nr_pages, enum migrate_mode mode)
 {
 	int i;
 	struct page *dst_base = dst;
 	struct page *src_base = src;
+	int rc = -EFAULT;
 
 	for (i = 0; i < nr_pages; ) {
 		cond_resched();
-		copy_highpage(dst, src);
+
+		if (mode & MIGRATE_DMA)
+			rc = copy_page_dma(dst, src, 1);
+
+		if (rc)
+			copy_highpage(dst, src);
 
 		i++;
 		dst = mem_map_next(dst, dst_base, i);
@@ -519,10 +525,12 @@ static void __copy_gigantic_page(struct page *dst, struct page *src,
 	}
 }
 
-static void copy_huge_page(struct page *dst, struct page *src)
+static void copy_huge_page(struct page *dst, struct page *src, 
+						enum migrate_mode mode)
 {
 	int i;
 	int nr_pages;
+	int rc = -EFAULT;
 
 	if (PageHuge(src)) {
 		/* hugetlbfs page */
@@ -530,7 +538,7 @@ static void copy_huge_page(struct page *dst, struct page *src)
 		nr_pages = pages_per_huge_page(h);
 
 		if (unlikely(nr_pages > MAX_ORDER_NR_PAGES)) {
-			__copy_gigantic_page(dst, src, nr_pages);
+			__copy_gigantic_page(dst, src, nr_pages, mode);
 			return;
 		}
 	} else {
@@ -539,23 +547,34 @@ static void copy_huge_page(struct page *dst, struct page *src)
 		nr_pages = hpage_nr_pages(src);
 	}
 
-	for (i = 0; i < nr_pages; i++) {
-		cond_resched();
-		copy_highpage(dst + i, src + i);
-	}
+	if (mode & MIGRATE_DMA)
+		rc = copy_page_dma(dst, src, nr_pages);
+
+	if (rc)
+		for (i = 0; i < nr_pages; i++) {
+			cond_resched();
+			copy_highpage(dst + i, src + i);
+		}
 }
 
 /*
  * Copy the page to its new location
  */
-void migrate_page_copy(struct page *newpage, struct page *page)
+void migrate_page_copy(struct page *newpage, struct page *page, 
+					   enum migrate_mode mode)
 {
 	int cpupid;
+	int rc = -EFAULT;
 
 	if (PageHuge(page) || PageTransHuge(page))
-		copy_huge_page(newpage, page);
-	else
-		copy_highpage(newpage, page);
+		copy_huge_page(newpage, page, mode);
+	else {
+		if (mode & MIGRATE_DMA)
+			rc = copy_page_dma(newpage, page, 1);
+
+		if (rc)
+			copy_highpage(newpage, page);
+	}
 
 	if (PageError(page))
 		SetPageError(newpage);
@@ -635,7 +654,8 @@ int migrate_page(struct address_space *mapping,
 	if (rc != MIGRATEPAGE_SUCCESS)
 		return rc;
 
-	migrate_page_copy(newpage, page);
+	migrate_page_copy(newpage, page, mode);
+
 	return MIGRATEPAGE_SUCCESS;
 }
 EXPORT_SYMBOL(migrate_page);
@@ -685,7 +705,7 @@ int buffer_migrate_page(struct address_space *mapping,
 
 	SetPagePrivate(newpage);
 
-	migrate_page_copy(newpage, page);
+	migrate_page_copy(newpage, page, 0);
 
 	bh = head;
 	do {
@@ -1281,11 +1301,16 @@ static struct page *new_page_node(struct page *p, unsigned long private,
  */
 static int do_move_page_to_node_array(struct mm_struct *mm,
 				      struct page_to_node *pm,
-				      int migrate_all)
+				      int migrate_all,
+					  int migrate_use_dma)
 {
 	int err;
 	struct page_to_node *pp;
 	LIST_HEAD(pagelist);
+	enum migrate_mode mode = MIGRATE_SYNC;
+
+	if (migrate_use_dma)
+		mode |= MIGRATE_DMA;
 
 	down_read(&mm->mmap_sem);
 
@@ -1361,7 +1386,9 @@ set_status:
 	err = 0;
 	if (!list_empty(&pagelist)) {
 		err = migrate_pages(&pagelist, new_page_node, NULL,
-				(unsigned long)pm, MIGRATE_SYNC, MR_SYSCALL);
+				(unsigned long)pm, 
+				mode,
+				MR_SYSCALL);
 		if (err)
 			putback_movable_pages(&pagelist);
 	}
@@ -1438,7 +1465,8 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 
 		/* Migrate this chunk */
 		err = do_move_page_to_node_array(mm, pm,
-						 flags & MPOL_MF_MOVE_ALL);
+						 flags & MPOL_MF_MOVE_ALL,
+						 flags & MPOL_MF_MOVE_DMA);
 		if (err < 0)
 			goto out_pm;
 
@@ -1545,7 +1573,7 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
 	nodemask_t task_nodes;
 
 	/* Check flags */
-	if (flags & ~(MPOL_MF_MOVE|MPOL_MF_MOVE_ALL))
+	if (flags & ~(MPOL_MF_MOVE|MPOL_MF_MOVE_ALL|MPOL_MF_MOVE_DMA))
 		return -EINVAL;
 
 	if ((flags & MPOL_MF_MOVE_ALL) && !capable(CAP_SYS_NICE))
@@ -1840,7 +1868,7 @@ int migrate_misplaced_transhuge_page(struct mm_struct *mm,
 	/* anon mapping, we can simply copy page->mapping to the new page: */
 	new_page->mapping = page->mapping;
 	new_page->index = page->index;
-	migrate_page_copy(new_page, page);
+	migrate_page_copy(new_page, page, 0);
 	WARN_ON(PageLRU(new_page));
 
 	/* Recheck the target PMD */
