@@ -292,6 +292,12 @@ config ARCH_ENABLE_HUGEPAGE_MIGRATION
 config ARCH_ENABLE_THP_MIGRATION
 	bool
 
+config MULTI_THREAD_MIGRATION
+	bool "Multi-threaded page migration"
+	depends on ARCH_ENABLE_THP_MIGRATION
+	help
+	  Migrate hugepages with multiple threads to get higher throughput.
+
 config PHYS_ADDR_T_64BIT
 	def_bool 64BIT || ARCH_PHYS_ADDR_T_64BIT
 

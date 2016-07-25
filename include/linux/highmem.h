@@ -236,6 +236,19 @@ static inline void copy_user_highpage(struct page *to, struct page *from,
 
 #endif
 
+#ifdef CONFIG_MULTI_THREAD_MIGRATION
+
+int copy_page_multithread(struct page *to, struct page *from, int nr_pages);
+
+#else
+
+static inline int copy_page_multithread(struct page *to, struct page *from, int nr_pages)
+{
+	return -ENODEV;
+}
+
+#endif
+
 static inline void copy_highpage(struct page *to, struct page *from)
 {
 	char *vfrom, *vto;
