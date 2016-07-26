@@ -56,6 +56,7 @@ enum mpol_rebind_step {
 
 #define MPOL_MF_MOVE_DMA      (1<<5)
 #define MPOL_MF_MOVE_MT      (1<<6)
+#define MPOL_MF_MOVE_CONCUR  (1<<7)
 
 #define MPOL_MF_VALID	(MPOL_MF_STRICT   | 	\
 			 MPOL_MF_MOVE     | 	\
