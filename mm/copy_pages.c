@@ -84,3 +84,65 @@ int copy_pages_mthread(struct page *to, struct page *from, int nr_pages)
 	kfree(work_items);
 	return 0;
 }
+
+int copy_page_lists_mthread(struct page **to, struct page **from, int nr_pages) 
+{
+	int err = 0;
+	unsigned int cthreads, node = page_to_nid(*to);
+	int i;
+	struct copy_info *work_items;
+	int nr_pages_per_page = hpage_nr_pages(*from);
+	const struct cpumask *cpumask = cpumask_of_node(node);
+	int cpu_id_list[32] = {0};
+	int cpu;
+
+	cthreads = nr_copythreads;
+	cthreads = min_t(unsigned int, cthreads, cpumask_weight(cpumask));
+	cthreads = (cthreads / 2) * 2;
+	cthreads = min_t(unsigned int, nr_pages, cthreads);
+
+	work_items = kzalloc(sizeof(struct copy_info)*nr_pages,
+						 GFP_KERNEL);
+	if (!work_items)
+		return -ENOMEM;
+
+	i = 0;
+	for_each_cpu(cpu, cpumask) {
+		if (i >= cthreads)
+			break;
+		cpu_id_list[i] = cpu;
+		++i;
+	}
+
+	for (i = 0; i < nr_pages; ++i) {
+		int thread_idx = i % cthreads;
+
+		INIT_WORK((struct work_struct *)&work_items[i], 
+				  copythread);
+
+		work_items[i].to = kmap(to[i]);
+		work_items[i].from = kmap(from[i]);
+		work_items[i].chunk_size = PAGE_SIZE * hpage_nr_pages(from[i]);
+
+		BUG_ON(nr_pages_per_page != hpage_nr_pages(from[i]));
+		BUG_ON(nr_pages_per_page != hpage_nr_pages(to[i]));
+
+
+		queue_work_on(cpu_id_list[thread_idx], 
+					  system_highpri_wq, 
+					  (struct work_struct *)&work_items[i]);
+	}
+
+	/* Wait until it finishes  */
+	for (i = 0; i < cthreads; ++i)
+		flush_work((struct work_struct *) &work_items[i]);
+
+	for (i = 0; i < nr_pages; ++i) {
+			kunmap(to[i]);
+			kunmap(from[i]);
+	}
+
+	kfree(work_items);
+
+	return err;
+}

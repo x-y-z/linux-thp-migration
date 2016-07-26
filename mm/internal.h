@@ -498,4 +498,7 @@ extern const struct trace_print_flags pageflag_names[];
 extern const struct trace_print_flags vmaflag_names[];
 extern const struct trace_print_flags gfpflag_names[];
 
+extern int copy_page_lists_mthread(struct page **to,
+			struct page **from, int nr_pages);
+
 #endif	/* __MM_INTERNAL_H */
