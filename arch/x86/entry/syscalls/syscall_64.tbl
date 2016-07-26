@@ -336,6 +336,8 @@
 327	64	preadv2			sys_preadv2
 328	64	pwritev2		sys_pwritev2
 
+330	64	exchange_pages		sys_exchange_pages
+
 #
 # x32-specific system call numbers start at 512 to avoid cache impact
 # for native 64-bit operation.
