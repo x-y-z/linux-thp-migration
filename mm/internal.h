@@ -500,10 +500,13 @@ extern const struct trace_print_flags gfpflag_names[];
 
 extern int copy_page_lists_mthread(struct page **to,
 			struct page **from, int nr_pages);
+extern int copy_page_lists_dma_always(struct page **to,
+			struct page **from, int nr_pages);
 
 extern int exchange_page_mthread(struct page *to, struct page *from,
 			int nr_pages);
 extern int exchange_page_lists_mthread(struct page **to,
 						  struct page **from, 
 						  int nr_pages);
+
 #endif	/* __MM_INTERNAL_H */

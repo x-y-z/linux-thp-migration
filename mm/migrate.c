@@ -1611,7 +1611,10 @@ static int copy_to_new_pages_concur(struct list_head *unmapped_list_ptr,
 
 	BUG_ON(idx != num_pages);
 	
-	if (mode & MIGRATE_MT)
+	if (mode & MIGRATE_DMA)
+		rc = copy_page_lists_dma_always(dst_page_list, src_page_list,
+							num_pages);
+	else if (mode & MIGRATE_MT)
 		rc = copy_page_lists_mthread(dst_page_list, src_page_list,
 							num_pages);
 
