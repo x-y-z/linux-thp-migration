@@ -63,6 +63,7 @@ struct page *ksm_might_need_to_copy(struct page *page,
 
 int rmap_walk_ksm(struct page *page, struct rmap_walk_control *rwc);
 void ksm_migrate_page(struct page *newpage, struct page *oldpage);
+void ksm_exchange_page(struct page *to_page, struct page *from_page);
 
 #else  /* !CONFIG_KSM */
 
@@ -101,6 +102,9 @@ static inline int rmap_walk_ksm(struct page *page,
 }
 
 static inline void ksm_migrate_page(struct page *newpage, struct page *oldpage)
+{
+}
+static inline void ksm_exchange_page(struct page *to_page, struct page *from_page)
 {
 }
 #endif /* CONFIG_MMU */
