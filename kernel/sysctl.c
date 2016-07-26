@@ -102,6 +102,8 @@ extern int limit_dma_chans;
 extern int use_mt_copy;
 extern int limit_mt_num;
 
+extern int accel_page_migration;
+
 /* External variables not in a header file. */
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
@@ -1390,6 +1392,15 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 		.extra1		= &zero,
+	 },
+	 {
+		.procname	= "accel_page_migration",
+		.data		= &accel_page_migration,
+		.maxlen		= sizeof(accel_page_migration),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+		.extra1		= &zero,
+		.extra2		= &one,
 	 },
 	 {
 		.procname	= "hugetlb_shm_group",

@@ -47,6 +47,8 @@
 
 #include "internal.h"
 
+int accel_page_migration = 1;
+
 /*
  * migrate_prep() needs to be called before we start compiling a list of pages
  * to be migrated using isolate_lru_page(). If scheduling work on other CPUs is
@@ -548,6 +550,13 @@ static void copy_huge_page(struct page *dst, struct page *src,
 		/* thp page */
 		BUG_ON(!PageTransHuge(src));
 		nr_pages = hpage_nr_pages(src);
+	}
+
+	/* Try to accelerate page migration if it is not specified in mode  */
+	if (accel_page_migration &&
+		!(mode & (MIGRATE_DMA|MIGRATE_MT))) {
+		mode |= MIGRATE_DMA;
+		mode |= MIGRATE_MT;
 	}
 
 	if (mode & MIGRATE_DMA)
