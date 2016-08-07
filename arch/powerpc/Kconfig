@@ -548,6 +548,10 @@ config ARCH_SPARSEMEM_DEFAULT
 config SYS_SUPPORTS_HUGETLBFS
 	bool
 
+config ARCH_ENABLE_THP_MIGRATION
+	def_bool y
+	depends on PPC64 && TRANSPARENT_HUGEPAGE && MIGRATION
+
 source "mm/Kconfig"
 
 config ARCH_MEMORY_PROBE
