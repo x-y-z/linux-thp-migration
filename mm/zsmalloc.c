@@ -1981,7 +1981,7 @@ static int zs_page_migrate(struct address_space *mapping, struct page *newpage,
 	 * happen under the zs lock, which does not work with
 	 * MIGRATE_SYNC_NO_COPY workflow.
 	 */
-	if (mode == MIGRATE_SYNC_NO_COPY)
+	if ((mode & MIGRATE_MODE_MASK) == MIGRATE_SYNC_NO_COPY)
 		return -EINVAL;
 
 	VM_BUG_ON_PAGE(!PageMovable(page), page);

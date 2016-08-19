@@ -17,6 +17,8 @@ enum migrate_mode {
 	MIGRATE_SYNC_LIGHT,
 	MIGRATE_SYNC,
 	MIGRATE_SYNC_NO_COPY,
+
+	MIGRATE_MODE_MASK = 3,
 };
 
 #endif		/* MIGRATE_MODE_H_INCLUDED */
