@@ -88,6 +88,7 @@ enum ttu_flags {
 	TTU_MUNLOCK = 4,		/* munlock mode */
 	TTU_LZFREE = 8,			/* lazy free mode */
 	TTU_SPLIT_HUGE_PMD = 16,	/* split huge PMD if any */
+	TTU_SPLIT_FREEZE = 32,		/* freeze pte under splitting thp */
 
 	TTU_IGNORE_MLOCK = (1 << 8),	/* ignore mlock */
 	TTU_IGNORE_ACCESS = (1 << 9),	/* don't age */
