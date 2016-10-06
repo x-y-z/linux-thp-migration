@@ -1442,6 +1442,13 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	struct rmap_private *rp = arg;
 	enum ttu_flags flags = rp->flags;
 
+	if (flags & TTU_MIGRATION) {
+		if (!PageHuge(page) && PageTransCompound(page)) {
+			set_pmd_migration_entry(page, vma, address);
+			goto out;
+		}
+	}
+
 	/* munlock has nothing to gain from examining un-locked vmas */
 	if ((flags & TTU_MUNLOCK) && !(vma->vm_flags & VM_LOCKED))
 		goto out;
