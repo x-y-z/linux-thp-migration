@@ -1304,6 +1304,7 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	struct rmap_private *rp = arg;
 	enum ttu_flags flags = rp->flags;
 
+
 	/* munlock has nothing to gain from examining un-locked vmas */
 	if ((flags & TTU_MUNLOCK) && !(vma->vm_flags & VM_LOCKED))
 		return SWAP_AGAIN;
@@ -1314,11 +1315,18 @@ static int try_to_unmap_one(struct page *page, struct vm_area_struct *vma,
 	}
 
 	while (page_vma_mapped_walk(&pvmw)) {
+		/* THP migration */
+		if (flags & TTU_MIGRATION) {
+			if (!PageHuge(page) && PageTransCompound(page)) {
+				set_pmd_migration_entry(&pvmw, page);
+				continue;
+			}
+		}
+		/* Unexpected PMD-mapped THP */
+		VM_BUG_ON_PAGE(!pvmw.pte, page);
+
 		subpage = page - page_to_pfn(page) + pte_pfn(*pvmw.pte);
 		address = pvmw.address;
-
-		/* Unexpected PMD-mapped THP? */
-		VM_BUG_ON_PAGE(!pvmw.pte, page);
 
 		/*
 		 * If the page is mlock()d, we cannot swap it out.
