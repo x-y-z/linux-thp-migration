@@ -103,7 +103,10 @@ static inline void *swp_to_radix_entry(swp_entry_t entry)
 #ifdef CONFIG_MIGRATION
 static inline swp_entry_t make_migration_entry(struct page *page, int write)
 {
-	BUG_ON(!PageLocked(page));
+	if (PageCompound(page))
+		BUG_ON(!PageLocked(compound_head(page)));
+	else
+		BUG_ON(!PageLocked(page));
 	return swp_entry(write ? SWP_MIGRATION_WRITE : SWP_MIGRATION_READ,
 			page_to_pfn(page));
 }
@@ -126,7 +129,10 @@ static inline struct page *migration_entry_to_page(swp_entry_t entry)
 	 * Any use of migration entries may only occur while the
 	 * corresponding page is locked
 	 */
-	BUG_ON(!PageLocked(p));
+	if (PageCompound(p))
+		BUG_ON(!PageLocked(compound_head(p)));
+	else
+		BUG_ON(!PageLocked(p));
 	return p;
 }
 
@@ -161,6 +167,69 @@ static inline int is_write_migration_entry(swp_entry_t entry)
 	return 0;
 }
 
+#endif
+
+#ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
+extern void set_pmd_migration_entry(struct page *page,
+		struct vm_area_struct *vma, unsigned long address);
+
+extern int remove_migration_pmd(struct page *new, pmd_t *pmd,
+		struct vm_area_struct *vma, unsigned long addr, void *old);
+
+extern void pmd_migration_entry_wait(struct mm_struct *mm, pmd_t *pmd);
+
+static inline swp_entry_t pmd_to_swp_entry(pmd_t pmd)
+{
+	swp_entry_t arch_entry;
+
+	arch_entry = __pmd_to_swp_entry(pmd);
+	return swp_entry(__swp_type(arch_entry), __swp_offset(arch_entry));
+}
+
+static inline pmd_t swp_entry_to_pmd(swp_entry_t entry)
+{
+	swp_entry_t arch_entry;
+
+	arch_entry = __swp_entry(swp_type(entry), swp_offset(entry));
+	return __swp_entry_to_pmd(arch_entry);
+}
+
+static inline int is_pmd_migration_entry(pmd_t pmd)
+{
+	return !pmd_present(pmd) && is_migration_entry(pmd_to_swp_entry(pmd));
+}
+#else
+static inline void set_pmd_migration_entry(struct page *page,
+			struct vm_area_struct *vma, unsigned long address)
+{
+	BUILD_BUG();
+}
+
+static inline int remove_migration_pmd(struct page *new, pmd_t *pmd,
+		struct vm_area_struct *vma, unsigned long addr, void *old)
+{
+	BUILD_BUG();
+	return 0;
+}
+
+static inline void pmd_migration_entry_wait(struct mm_struct *m, pmd_t *p) { }
+
+static inline swp_entry_t pmd_to_swp_entry(pmd_t pmd)
+{
+	BUILD_BUG();
+	return swp_entry(0, 0);
+}
+
+static inline pmd_t swp_entry_to_pmd(swp_entry_t entry)
+{
+	BUILD_BUG();
+	return (pmd_t){ 0 };
+}
+
+static inline int is_pmd_migration_entry(pmd_t pmd)
+{
+	return 0;
+}
 #endif
 
 #ifdef CONFIG_MEMORY_FAILURE

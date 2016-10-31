@@ -198,6 +198,8 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
 {
 	struct mm_struct *mm = vma->vm_mm;
 	swp_entry_t entry;
+	pgd_t *pgd;
+	pud_t *pud;
  	pmd_t *pmd;
 	pte_t *ptep, pte;
  	spinlock_t *ptl;
@@ -208,8 +210,27 @@ static int remove_migration_pte(struct page *new, struct vm_area_struct *vma,
 			goto out;
 		ptl = huge_pte_lockptr(hstate_vma(vma), mm, ptep);
 	} else {
-		pmd = mm_find_pmd(mm, addr);
+		pmd_t pmde;
+
+		pgd = pgd_offset(mm, addr);
+		if (!pgd_present(*pgd))
+			goto out;
+		pud = pud_offset(pgd, addr);
+		if (!pud_present(*pud))
+			goto out;
+		pmd = pmd_offset(pud, addr);
 		if (!pmd)
+			goto out;
+
+		if (PageTransCompound(new)) {
+			remove_migration_pmd(new, pmd, vma, addr, old);
+			goto out;
+		}
+
+		pmde = *pmd;
+		barrier();
+
+		if (!pmd_present(pmde) || pmd_trans_huge(pmde))
 			goto out;
 
 		ptep = pte_offset_map(pmd, addr);
@@ -343,6 +364,27 @@ void migration_entry_wait_huge(struct vm_area_struct *vma,
 	spinlock_t *ptl = huge_pte_lockptr(hstate_vma(vma), mm, pte);
 	__migration_entry_wait(mm, pte, ptl);
 }
+
+#ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
+void pmd_migration_entry_wait(struct mm_struct *mm, pmd_t *pmd)
+{
+	spinlock_t *ptl;
+	struct page *page;
+
+	ptl = pmd_lock(mm, pmd);
+	if (!is_pmd_migration_entry(*pmd))
+		goto unlock;
+	page = migration_entry_to_page(pmd_to_swp_entry(*pmd));
+	if (!get_page_unless_zero(page))
+		goto unlock;
+	spin_unlock(ptl);
+	wait_on_page_locked(page);
+	put_page(page);
+	return;
+unlock:
+	spin_unlock(ptl);
+}
+#endif
 
 #ifdef CONFIG_BLOCK
 /* Returns true if all buffers are successfully locked */

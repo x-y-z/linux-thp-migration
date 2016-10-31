@@ -1431,20 +1431,49 @@ int zap_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		spin_unlock(ptl);
 		tlb_remove_page_size(tlb, pmd_page(orig_pmd), HPAGE_PMD_SIZE);
 	} else {
-		struct page *page = pmd_page(orig_pmd);
-		page_remove_rmap(page, true);
-		VM_BUG_ON_PAGE(page_mapcount(page) < 0, page);
-		VM_BUG_ON_PAGE(!PageHead(page), page);
-		if (PageAnon(page)) {
-			pgtable_t pgtable;
-			pgtable = pgtable_trans_huge_withdraw(tlb->mm, pmd);
-			pte_free(tlb->mm, pgtable);
-			atomic_long_dec(&tlb->mm->nr_ptes);
-			add_mm_counter(tlb->mm, MM_ANONPAGES, -HPAGE_PMD_NR);
+		struct page *page;
+		int migration = 0;
+
+		if (!is_pmd_migration_entry(orig_pmd)) {
+			page = pmd_page(orig_pmd);
+			page_remove_rmap(page, true);
+			VM_BUG_ON_PAGE(page_mapcount(page) < 0, page);
+			VM_BUG_ON_PAGE(!PageHead(page), page);
+			if (PageAnon(page)) {
+				pgtable_t pgtable;
+				pgtable = pgtable_trans_huge_withdraw(tlb->mm,
+								      pmd);
+				pte_free(tlb->mm, pgtable);
+				atomic_long_dec(&tlb->mm->nr_ptes);
+				add_mm_counter(tlb->mm, MM_ANONPAGES,
+					       -HPAGE_PMD_NR);
+			} else {
+				if (arch_needs_pgtable_deposit())
+					zap_deposited_table(tlb->mm, pmd);
+				add_mm_counter(tlb->mm, MM_FILEPAGES,
+					       -HPAGE_PMD_NR);
+			}
 		} else {
-			if (arch_needs_pgtable_deposit())
-				zap_deposited_table(tlb->mm, pmd);
-			add_mm_counter(tlb->mm, MM_FILEPAGES, -HPAGE_PMD_NR);
+			swp_entry_t entry;
+
+			entry = pmd_to_swp_entry(orig_pmd);
+			page = pfn_to_page(swp_offset(entry));
+			if (PageAnon(page)) {
+				pgtable_t pgtable;
+				pgtable = pgtable_trans_huge_withdraw(tlb->mm,
+								      pmd);
+				pte_free(tlb->mm, pgtable);
+				atomic_long_dec(&tlb->mm->nr_ptes);
+				add_mm_counter(tlb->mm, MM_ANONPAGES,
+					       -HPAGE_PMD_NR);
+			} else {
+				if (arch_needs_pgtable_deposit())
+					zap_deposited_table(tlb->mm, pmd);
+				add_mm_counter(tlb->mm, MM_FILEPAGES,
+					       -HPAGE_PMD_NR);
+			}
+			free_swap_and_cache(entry); /* waring in failure? */
+			migration = 1;
 		}
 		spin_unlock(ptl);
 		tlb_remove_page_size(tlb, page, HPAGE_PMD_SIZE);
@@ -2360,4 +2389,157 @@ static int __init split_huge_pages_debugfs(void)
 	return 0;
 }
 late_initcall(split_huge_pages_debugfs);
+#endif
+
+#ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
+void set_pmd_migration_entry(struct page *page, struct vm_area_struct *vma,
+				unsigned long addr)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	pgd_t *pgd;
+	pud_t *pud;
+	pmd_t *pmd;
+	pmd_t pmdval;
+	swp_entry_t entry;
+	spinlock_t *ptl;
+
+	pgd = pgd_offset(mm, addr);
+	if (!pgd_present(*pgd))
+		return;
+	pud = pud_offset(pgd, addr);
+	if (!pud_present(*pud))
+		return;
+	pmd = pmd_offset(pud, addr);
+	pmdval = *pmd;
+	barrier();
+	if (!pmd_present(pmdval))
+		return;
+
+	mmu_notifier_invalidate_range_start(mm, addr, addr + HPAGE_PMD_SIZE);
+	if (pmd_trans_huge(pmdval)) {
+		pmd_t pmdswp;
+
+		ptl = pmd_lock(mm, pmd);
+		if (!pmd_same(*pmd, pmdval))
+			goto unlock_pmd;
+		if (pmd_page(*pmd) != page)
+			goto unlock_pmd;
+
+		pmdval = pmdp_huge_get_and_clear(mm, addr, pmd);
+		if (pmd_dirty(pmdval))
+			set_page_dirty(page);
+		entry = make_migration_entry(page, pmd_write(pmdval));
+		pmdswp = swp_entry_to_pmd(entry);
+		pmdswp = pmd_mkhuge(pmdswp);
+		set_pmd_at(mm, addr, pmd, pmdswp);
+		page_remove_rmap(page, true);
+		put_page(page);
+unlock_pmd:
+		spin_unlock(ptl);
+	} else { /* pte-mapped thp */
+		pte_t *pte;
+		pte_t pteval;
+		struct page *tmp = compound_head(page);
+		unsigned long address = addr & HPAGE_PMD_MASK;
+		pte_t swp_pte;
+		int i;
+
+		pte = pte_offset_map_lock(mm, pmd, address, &ptl);
+
+		for (i = 0; i < HPAGE_PMD_NR; 
+			 i++, pte++, tmp++, address += PAGE_SIZE) {
+			if (!pte_present(*pte) || pte_page(*pte) != tmp)
+				continue;
+			pteval = ptep_clear_flush(vma, address, pte);
+			if (pte_dirty(pteval))
+				set_page_dirty(tmp);
+			entry = make_migration_entry(tmp, pte_write(pteval));
+			swp_pte = swp_entry_to_pte(entry);
+			set_pte_at(mm, address, pte, swp_pte);
+			page_remove_rmap(tmp, false);
+			put_page(tmp);
+		}
+		pte_unmap_unlock(pte, ptl);
+	}
+	mmu_notifier_invalidate_range_end(mm, addr, addr + HPAGE_PMD_SIZE);
+	return;
+}
+
+int remove_migration_pmd(struct page *new, pmd_t *pmd,
+		struct vm_area_struct *vma, unsigned long addr, void *old)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	spinlock_t *ptl;
+	pmd_t pmde;
+	swp_entry_t entry;
+
+	pmde = *pmd;
+	barrier();
+
+	if (!pmd_present(pmde)) {
+		unsigned long mmun_start = addr & HPAGE_PMD_MASK;
+		unsigned long mmun_end = mmun_start + HPAGE_PMD_SIZE;
+
+		if (!is_migration_entry(pmd_to_swp_entry(pmde)))
+			return SWAP_AGAIN;
+
+		ptl = pmd_lock(mm, pmd);
+		entry = pmd_to_swp_entry(*pmd);
+		if (migration_entry_to_page(entry) != old)
+			goto unlock_ptl;
+		get_page(new);
+		pmde = pmd_mkold(mk_huge_pmd(new, vma->vm_page_prot));
+		if (is_write_migration_entry(entry))
+			pmde = maybe_pmd_mkwrite(pmde, vma);
+
+		flush_cache_range(vma, mmun_start, mmun_end);
+		page_add_anon_rmap(new, vma, mmun_start, true);
+		pmdp_huge_clear_flush_notify(vma, mmun_start, pmd);
+		set_pmd_at(mm, mmun_start, pmd, pmde);
+		flush_tlb_range(vma, mmun_start, mmun_end);
+		if (vma->vm_flags & VM_LOCKED)
+			mlock_vma_page(new);
+		update_mmu_cache_pmd(vma, addr, pmd);
+unlock_ptl:
+		spin_unlock(ptl);
+
+		return SWAP_AGAIN;
+	} else if (!pmd_trans_huge(pmde)) { /* pte-mapped thp */
+		pte_t *ptep;
+		pte_t pte;
+		int i;
+		struct page *tmpnew = compound_head(new);
+		struct page *tmpold = compound_head((struct page *)old);
+		unsigned long address = addr & HPAGE_PMD_MASK;
+
+		ptep = pte_offset_map_lock(mm, pmd, address, &ptl);
+
+		for (i = 0; i < HPAGE_PMD_NR;
+		     i++, ptep++, tmpnew++, tmpold++, address += PAGE_SIZE) {
+			pte = *ptep;
+			if (!is_swap_pte(pte))
+				continue;
+			entry = pte_to_swp_entry(pte);
+			if (!is_migration_entry(entry) ||
+			    migration_entry_to_page(entry) != tmpold)
+				continue;
+			get_page(tmpnew);
+			pte = pte_mkold(mk_pte(tmpnew,
+					       READ_ONCE(vma->vm_page_prot)));
+			if (pte_swp_soft_dirty(*ptep))
+				pte = pte_mksoft_dirty(pte);
+			if (is_write_migration_entry(entry))
+				pte = maybe_mkwrite(pte, vma);
+			flush_dcache_page(tmpnew);
+			set_pte_at(mm, address, ptep, pte);
+			if (PageAnon(new))
+				page_add_anon_rmap(tmpnew, vma, address, false);
+			else
+				page_add_file_rmap(tmpnew, false);
+			update_mmu_cache(vma, address, ptep);
+		}
+		pte_unmap_unlock(ptep, ptl);
+	}
+	return SWAP_AGAIN;
+}
 #endif
