@@ -836,6 +836,21 @@ int copy_huge_pmd(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 
 	ret = -EAGAIN;
 	pmd = *src_pmd;
+
+	if (unlikely(is_pmd_migration_entry(pmd))) {
+		swp_entry_t entry = pmd_to_swp_entry(pmd);
+
+		if (is_write_migration_entry(entry)) {
+			make_migration_entry_read(&entry);
+			pmd = swp_entry_to_pmd(entry);
+			set_pmd_at(src_mm, addr, src_pmd, pmd);
+		}
+		set_pmd_at(dst_mm, addr, dst_pmd, pmd);
+		ret = 0;
+		goto out_unlock;
+	}
+	WARN_ONCE(!pmd_present(pmd), "Uknown non-present format on pmd.\n");
+
 	if (unlikely(!pmd_trans_huge(pmd))) {
 		pte_free(dst_mm, pgtable);
 		goto out_unlock;
@@ -1025,6 +1040,9 @@ int do_huge_pmd_wp_page(struct vm_fault *vmf, pmd_t orig_pmd)
 	if (unlikely(!pmd_same(*vmf->pmd, orig_pmd)))
 		goto out_unlock;
 
+	if (unlikely(!pmd_present(orig_pmd)))
+		goto out_unlock;
+
 	page = pmd_page(orig_pmd);
 	VM_BUG_ON_PAGE(!PageCompound(page) || !PageHead(page), page);
 	/*
@@ -1149,7 +1167,15 @@ struct page *follow_trans_huge_pmd(struct vm_area_struct *vma,
 	if ((flags & FOLL_NUMA) && pmd_protnone(*pmd))
 		goto out;
 
-	page = pmd_page(*pmd);
+	if (is_pmd_migration_entry(*pmd)) {
+		swp_entry_t entry;
+
+		entry = pmd_to_swp_entry(*pmd);
+		page = pfn_to_page(swp_offset(entry));
+		if (!is_migration_entry(entry))
+			goto out;
+	} else
+		page = pmd_page(*pmd);
 	VM_BUG_ON_PAGE(!PageHead(page) && !is_zone_device_page(page), page);
 	if (flags & FOLL_TOUCH)
 		touch_pmd(vma, addr, pmd);
@@ -1345,6 +1371,9 @@ bool madvise_free_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 	if (is_huge_zero_pmd(orig_pmd))
 		goto out;
 
+	if (unlikely(!pmd_present(orig_pmd)))
+		goto out;
+
 	page = pmd_page(orig_pmd);
 	/*
 	 * If other processes are mapping this page, we couldn't discard
@@ -1476,7 +1505,8 @@ int zap_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 			migration = 1;
 		}
 		spin_unlock(ptl);
-		tlb_remove_page_size(tlb, page, HPAGE_PMD_SIZE);
+		if (!migration)
+			tlb_remove_page_size(tlb, page, HPAGE_PMD_SIZE);
 	}
 	return 1;
 }
@@ -1575,10 +1605,22 @@ int change_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
 		 * data is likely to be read-cached on the local CPU and
 		 * local/remote hits to the zero page are not interesting.
 		 */
-		if (prot_numa && is_huge_zero_pmd(*pmd)) {
-			spin_unlock(ptl);
-			return ret;
-		}
+		if (prot_numa && is_huge_zero_pmd(*pmd))
+			goto unlock;
+
+		if (is_pmd_migration_entry(*pmd)) {
+			swp_entry_t entry = pmd_to_swp_entry(*pmd);
+
+			if (is_write_migration_entry(entry)) {
+				pmd_t newpmd;
+
+				make_migration_entry_read(&entry);
+				newpmd = swp_entry_to_pmd(entry);
+				set_pmd_at(mm, addr, pmd, newpmd);
+			}
+			goto unlock;
+		} else if (!pmd_present(*pmd))
+			WARN_ONCE(1, "Uknown non-present format on pmd.\n");
 
 		if (!prot_numa || !pmd_protnone(*pmd)) {
 			entry = pmdp_huge_get_and_clear_notify(mm, addr, pmd);
@@ -1590,6 +1632,7 @@ int change_huge_pmd(struct vm_area_struct *vma, pmd_t *pmd,
 			BUG_ON(vma_is_anonymous(vma) && !preserve_write &&
 					pmd_write(entry));
 		}
+unlock:
 		spin_unlock(ptl);
 	}
 
@@ -1606,7 +1649,8 @@ spinlock_t *__pmd_trans_huge_lock(pmd_t *pmd, struct vm_area_struct *vma)
 {
 	spinlock_t *ptl;
 	ptl = pmd_lock(vma->vm_mm, pmd);
-	if (likely(pmd_trans_huge(*pmd) || pmd_devmap(*pmd)))
+	if (likely(is_swap_pmd(*pmd) || pmd_trans_huge(*pmd) ||
+			pmd_devmap(*pmd)))
 		return ptl;
 	spin_unlock(ptl);
 	return NULL;
@@ -2420,6 +2464,8 @@ void set_pmd_migration_entry(struct page *page, struct vm_area_struct *vma,
 		pmd_t pmdswp;
 
 		ptl = pmd_lock(mm, pmd);
+		if (!pmd_present(*pmd))
+			goto unlock_pmd;
 		if (!pmd_same(*pmd, pmdval))
 			goto unlock_pmd;
 		if (pmd_page(*pmd) != page)
@@ -2477,12 +2523,13 @@ int remove_migration_pmd(struct page *new, pmd_t *pmd,
 	barrier();
 
 	if (!pmd_present(pmde)) {
-		unsigned long mmun_start = addr & HPAGE_PMD_MASK;
-		unsigned long mmun_end = mmun_start + HPAGE_PMD_SIZE;
+		unsigned long mmun_start;
+		unsigned long mmun_end;
 
 		if (!is_migration_entry(pmd_to_swp_entry(pmde)))
 			return SWAP_AGAIN;
-
+		mmun_start = addr & HPAGE_PMD_MASK;
+		mmun_end = mmun_start + HPAGE_PMD_SIZE;
 		ptl = pmd_lock(mm, pmd);
 		entry = pmd_to_swp_entry(*pmd);
 		if (migration_entry_to_page(entry) != old)
@@ -2493,7 +2540,10 @@ int remove_migration_pmd(struct page *new, pmd_t *pmd,
 			pmde = maybe_pmd_mkwrite(pmde, vma);
 
 		flush_cache_range(vma, mmun_start, mmun_end);
-		page_add_anon_rmap(new, vma, mmun_start, true);
+		if (PageAnon(new))
+			page_add_anon_rmap(new, vma, mmun_start, true);
+		else
+			page_add_file_rmap(new, true);
 		pmdp_huge_clear_flush_notify(vma, mmun_start, pmd);
 		set_pmd_at(mm, mmun_start, pmd, pmde);
 		flush_tlb_range(vma, mmun_start, mmun_end);

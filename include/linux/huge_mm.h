@@ -125,12 +125,18 @@ extern void vma_adjust_trans_huge(struct vm_area_struct *vma,
 				    long adjust_next);
 extern spinlock_t *__pmd_trans_huge_lock(pmd_t *pmd,
 		struct vm_area_struct *vma);
+
+static inline int is_swap_pmd(pmd_t pmd)
+{
+	return !pmd_none(pmd) && !pmd_present(pmd);
+}
+
 /* mmap_sem must be held on entry */
 static inline spinlock_t *pmd_trans_huge_lock(pmd_t *pmd,
 		struct vm_area_struct *vma)
 {
 	VM_BUG_ON_VMA(!rwsem_is_locked(&vma->vm_mm->mmap_sem), vma);
-	if (pmd_trans_huge(*pmd) || pmd_devmap(*pmd))
+	if (is_swap_pmd(*pmd) || pmd_trans_huge(*pmd) || pmd_devmap(*pmd))
 		return __pmd_trans_huge_lock(pmd, vma);
 	else
 		return NULL;
@@ -140,6 +146,13 @@ static inline int hpage_nr_pages(struct page *page)
 	if (unlikely(PageTransHuge(page)))
 		return HPAGE_PMD_NR;
 	return 1;
+}
+
+static inline int hpage_order(struct page *page)
+{
+	if (unlikely(PageTransHuge(page)))
+		return HPAGE_PMD_ORDER;
+	return 0;
 }
 
 extern int do_huge_pmd_numa_page(struct vm_fault *vmf, pmd_t orig_pmd);
@@ -172,6 +185,7 @@ static inline bool thp_migration_supported(void)
 #define HPAGE_PMD_SIZE ({ BUILD_BUG(); 0; })
 
 #define hpage_nr_pages(x) 1
+#define hpage_order(x) 0
 
 #define transparent_hugepage_enabled(__vma) 0
 
@@ -210,6 +224,10 @@ static inline void vma_adjust_trans_huge(struct vm_area_struct *vma,
 					 unsigned long end,
 					 long adjust_next)
 {
+}
+static inline int is_swap_pmd(pmd_t pmd)
+{
+	return 0;
 }
 static inline spinlock_t *pmd_trans_huge_lock(pmd_t *pmd,
 		struct vm_area_struct *vma)
