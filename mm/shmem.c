@@ -2377,6 +2377,156 @@ shmem_write_end(struct file *file, struct address_space *mapping,
 	return copied;
 }
 
+static int shmem_migrate_page_move_mapping(struct address_space *mapping,
+		struct page *newpage, struct page *page,
+		struct buffer_head *head, enum migrate_mode mode,
+		int extra_count)
+{
+	struct zone *oldzone, *newzone;
+	int dirty;
+	int expected_count = 1 + extra_count;
+	void **pslot;
+	int i;
+	pgoff_t idx;
+
+	if (PageTransHuge(page))
+		pr_info("%s, %d\n", __func__, __LINE__);
+	if (!mapping) {
+		/* Anonymous page without mapping */
+		if (page_count(page) != expected_count)
+			return -EAGAIN;
+
+		/* No turning back from here */
+		newpage->index = page->index;
+		newpage->mapping = page->mapping;
+		if (PageSwapBacked(page))
+			__SetPageSwapBacked(newpage);
+
+		return MIGRATEPAGE_SUCCESS;
+	}
+
+	oldzone = page_zone(page);
+	newzone = page_zone(newpage);
+	idx = page->index;
+
+	spin_lock_irq(&mapping->tree_lock);
+
+	if (PageTransHuge(page)) {
+		void *item;
+
+		expected_count += hpage_nr_pages(page);
+		if (page_count(page) != expected_count)
+			goto unlock;
+		for (i = 0; i < HPAGE_PMD_NR; i++) {
+			pslot = radix_tree_lookup_slot(&mapping->page_tree, idx);
+			if (!pslot)
+				goto unlock;
+			item = radix_tree_deref_slot_protected(pslot,
+							&mapping->tree_lock);
+			if (item != page)
+				goto unlock;
+		}
+	} else {
+		expected_count += 1 + page_has_private(page);
+		pslot = radix_tree_lookup_slot(&mapping->page_tree,
+					       page_index(page));
+		if (page_count(page) != expected_count ||
+		    radix_tree_deref_slot_protected(pslot, &mapping->tree_lock)
+		    != page) {
+			goto unlock;
+		}
+	}
+
+	if (!page_ref_freeze(page, expected_count))
+		goto unlock;
+
+	/*
+	 * Now we know that no one else is looking at the page:
+	 * no turning back from here.
+	 */
+	newpage->index = page->index;
+	newpage->mapping = page->mapping;
+	if (PageSwapBacked(page))
+		__SetPageSwapBacked(newpage);
+
+	page_ref_add(newpage, hpage_nr_pages(newpage));	/* add cache reference */
+	if (PageSwapCache(page)) {
+		SetPageSwapCache(newpage);
+		set_page_private(newpage, page_private(page));
+	}
+
+	/* Move dirty while page refs frozen and newpage not yet exposed */
+	dirty = PageDirty(page);
+	if (dirty) {
+		ClearPageDirty(page);
+		SetPageDirty(newpage);
+	}
+
+	if (PageTransHuge(page)) {
+		for (i = 0; i < HPAGE_PMD_NR; i++) {
+			pslot = radix_tree_lookup_slot(&mapping->page_tree, idx + i);
+			radix_tree_replace_slot(&mapping->page_tree, pslot, newpage);
+		}
+	} else {
+		radix_tree_replace_slot(&mapping->page_tree, pslot, newpage);
+	}
+
+	/*
+	 * Drop cache reference from old page by unfreezing
+	 * to one less reference.
+	 * We know this isn't the last reference.
+	 */
+	page_ref_unfreeze(page, expected_count - 1);
+
+	spin_unlock(&mapping->tree_lock);
+	/* Leave irq disabled to prevent preemption while updating stats */
+
+	/*
+	 * If moved to a different zone then also account
+	 * the page for that zone. Other VM counters will be
+	 * taken care of when we establish references to the
+	 * new page and drop references to the old page.
+	 *
+	 * Note that anonymous pages are accounted for
+	 * via NR_FILE_PAGES and NR_ANON_MAPPED if they
+	 * are mapped to swap space.
+	 */
+	if (newzone != oldzone) {
+		__dec_node_state(oldzone->zone_pgdat, NR_FILE_PAGES);
+		__inc_node_state(newzone->zone_pgdat, NR_FILE_PAGES);
+		if (PageSwapBacked(page) && !PageSwapCache(page)) {
+			__dec_node_state(oldzone->zone_pgdat, NR_SHMEM);
+			__inc_node_state(newzone->zone_pgdat, NR_SHMEM);
+		}
+		if (dirty && mapping_cap_account_dirty(mapping)) {
+			__dec_node_state(oldzone->zone_pgdat, NR_FILE_DIRTY);
+			__dec_zone_state(oldzone, NR_ZONE_WRITE_PENDING);
+			__inc_node_state(newzone->zone_pgdat, NR_FILE_DIRTY);
+			__inc_zone_state(newzone, NR_ZONE_WRITE_PENDING);
+		}
+	}
+	local_irq_enable();
+
+	return MIGRATEPAGE_SUCCESS;
+unlock:
+	spin_unlock_irq(&mapping->tree_lock);
+	return -EAGAIN;
+}
+
+static int shmem_migrate_page(struct address_space *mapping,
+				struct page *newpage, struct page *page,
+				enum migrate_mode mode)
+{
+	int rc;
+
+	rc = shmem_migrate_page_move_mapping(mapping, newpage, page, NULL, mode, 0);
+	if (rc != MIGRATEPAGE_SUCCESS)
+		return rc;
+	migrate_page_copy(newpage, page);
+
+	return MIGRATEPAGE_SUCCESS;
+}
+
 static ssize_t shmem_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 	struct file *file = iocb->ki_filp;
@@ -3831,7 +3981,7 @@ static const struct address_space_operations shmem_aops = {
 	.write_end	= shmem_write_end,
 #endif
 #ifdef CONFIG_MIGRATION
-	.migratepage	= migrate_page,
+	.migratepage	= shmem_migrate_page,
 #endif
 	.error_remove_page = generic_error_remove_page,
 };
