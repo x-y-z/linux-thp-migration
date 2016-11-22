@@ -2522,7 +2522,7 @@ static int shmem_migrate_page(struct address_space *mapping,
 	rc = shmem_migrate_page_move_mapping(mapping, newpage, page, NULL, mode, 0);
 	if (rc != MIGRATEPAGE_SUCCESS)
 		return rc;
-	migrate_page_copy(newpage, page);
+	migrate_page_copy(newpage, page, MIGRATE_ST);
 
 	return MIGRATEPAGE_SUCCESS;
 }

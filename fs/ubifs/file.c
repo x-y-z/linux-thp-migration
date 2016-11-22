@@ -1468,7 +1468,7 @@ static int ubifs_migrate_page(struct address_space *mapping,
 		SetPagePrivate(newpage);
 	}
 
-	migrate_page_copy(newpage, page);
+	migrate_page_copy(newpage, page, MIGRATE_ST);
 	return MIGRATEPAGE_SUCCESS;
 }
 #endif
