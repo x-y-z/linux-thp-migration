@@ -8,10 +8,10 @@
  * MIGRATE_SYNC will block when migrating pages
  */
 enum migrate_mode {
-	MIGRATE_ASYNC,
-	MIGRATE_SYNC_LIGHT,
-	MIGRATE_SYNC,
-	MIGRATE_ST
+	MIGRATE_ASYNC		= 1<<0,
+	MIGRATE_SYNC_LIGHT	= 1<<1,
+	MIGRATE_SYNC		= 1<<2,
+	MIGRATE_ST		= 1<<3,
 };
 
 #endif		/* MIGRATE_MODE_H_INCLUDED */
