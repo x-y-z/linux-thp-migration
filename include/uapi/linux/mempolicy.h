@@ -55,6 +55,7 @@ enum mpol_rebind_step {
 #define MPOL_MF_INTERNAL (1<<4)	/* Internal flags start here */
 
 #define MPOL_MF_MOVE_MT  (1<<6)	/* Use multi-threaded page copy routine */
+#define MPOL_MF_MOVE_ANYWAY  (1<<7)	/* Migrate regardless of page location */
 
 #define MPOL_MF_VALID	(MPOL_MF_STRICT   | 	\
 			 MPOL_MF_MOVE     | 	\

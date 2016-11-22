@@ -1473,7 +1473,8 @@ static struct page *new_page_node(struct page *p, unsigned long private,
 static int do_move_page_to_node_array(struct mm_struct *mm,
 				      struct page_to_node *pm,
 				      int migrate_all,
-					  int migrate_use_mt)
+					  int migrate_use_mt,
+					  int migrate_anyway)
 {
 	int err;
 	struct page_to_node *pp;
@@ -1515,7 +1516,7 @@ static int do_move_page_to_node_array(struct mm_struct *mm,
 
 		err = page_to_nid(page);
 
-		if (err == pp->node)
+		if (err == pp->node && !migrate_anyway)
 			/*
 			 * Node already in the right place
 			 */
@@ -1636,7 +1637,8 @@ static int do_pages_move(struct mm_struct *mm, nodemask_t task_nodes,
 		/* Migrate this chunk */
 		err = do_move_page_to_node_array(mm, pm,
 						 flags & MPOL_MF_MOVE_ALL,
-						 flags & MPOL_MF_MOVE_MT);
+						 flags & MPOL_MF_MOVE_MT,
+						 flags & MPOL_MF_MOVE_ANYWAY);
 		if (err < 0)
 			goto out_pm;
 
@@ -1743,7 +1745,8 @@ SYSCALL_DEFINE6(move_pages, pid_t, pid, unsigned long, nr_pages,
 	nodemask_t task_nodes;
 
 	/* Check flags */
-	if (flags & ~(MPOL_MF_MOVE|MPOL_MF_MOVE_ALL|MPOL_MF_MOVE_MT))
+	if (flags & ~(MPOL_MF_MOVE|MPOL_MF_MOVE_ALL|MPOL_MF_MOVE_MT|
+				  MPOL_MF_MOVE_ANYWAY))
 		return -EINVAL;
 
 	if ((flags & MPOL_MF_MOVE_ALL) && !capable(CAP_SYS_NICE))
