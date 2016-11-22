@@ -723,6 +723,10 @@ config FORCE_MAX_ZONEORDER
 	  However for 4K, we choose a higher default value, 11 as opposed to 10, giving us
 	  4M allocations matching the default size used by generic code.
 
+config ARCH_ENABLE_THP_MIGRATION
+	def_bool y
+	depends on ARM64 && TRANSPARENT_HUGEPAGE && MIGRATION
+
 menuconfig ARMV8_DEPRECATED
 	bool "Emulate deprecated/obsolete ARMv8 instructions"
 	depends on COMPAT
