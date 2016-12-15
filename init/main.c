@@ -550,13 +550,14 @@ asmlinkage __visible void __init start_kernel(void)
 	if (WARN(!irqs_disabled(),
 		 "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
-	radix_tree_init();
+	idr_init_cache();
 	rcu_init();
 
 	/* trace_printk() and trace points may be used after this */
 	trace_init();
 
 	context_tracking_init();
+	radix_tree_init();
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
 	init_IRQ();
