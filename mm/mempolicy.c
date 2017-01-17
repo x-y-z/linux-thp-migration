@@ -1300,9 +1300,14 @@ static long do_mbind(unsigned long start, unsigned long len,
 		int nr_failed = 0;
 
 		if (!list_empty(&pagelist)) {
+			enum migrate_mode mode = MIGRATE_SYNC;
+
+			if (flags & MPOL_MF_MOVE_MT)
+				mode |= MIGRATE_MT;
+
 			WARN_ON_ONCE(flags & MPOL_MF_LAZY);
 			nr_failed = migrate_pages(&pagelist, new_page, NULL,
-				start, MIGRATE_SYNC, MR_MEMPOLICY_MBIND);
+					start, mode, MR_MEMPOLICY_MBIND);
 			if (nr_failed)
 				putback_movable_pages(&pagelist);
 		}
