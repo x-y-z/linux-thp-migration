@@ -601,6 +601,7 @@ static void copy_huge_page(struct page *dst, struct page *src,
 {
 	int i;
 	int nr_pages;
+	int rc = -EFAULT;
 
 	if (PageHuge(src)) {
 		/* hugetlbfs page */
@@ -617,10 +618,14 @@ static void copy_huge_page(struct page *dst, struct page *src,
 		nr_pages = hpage_nr_pages(src);
 	}
 
-	for (i = 0; i < nr_pages; i++) {
-		cond_resched();
-		copy_highpage(dst + i, src + i);
-	}
+	if (mode & MIGRATE_MT)
+		rc = copy_pages_mthread(dst, src, nr_pages);
+
+	if (rc)
+		for (i = 0; i < nr_pages; i++) {
+			cond_resched();
+			copy_highpage(dst + i, src + i);
+		}
 }
 
 /*
@@ -631,10 +636,16 @@ void migrate_page_copy(struct page *newpage, struct page *page,
 {
 	int cpupid;
 
-	if (PageHuge(page) || PageTransHuge(page))
+	if (PageHuge(page) || PageTransHuge(page)) {
 		copy_huge_page(newpage, page, mode);
-	else
-		copy_highpage(newpage, page);
+	} else {
+		if (mode & MIGRATE_MT) {
+			if (copy_pages_mthread(newpage, page, 1))
+				copy_highpage(newpage, page);
+		} else {
+			copy_highpage(newpage, page);
+		}
+	}
 
 	if (PageError(page))
 		SetPageError(newpage);

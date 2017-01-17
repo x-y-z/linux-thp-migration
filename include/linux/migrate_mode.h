@@ -12,6 +12,7 @@ enum migrate_mode {
 	MIGRATE_SYNC_LIGHT	= 1<<1,
 	MIGRATE_SYNC		= 1<<2,
 	MIGRATE_ST		= 1<<3,
+	MIGRATE_MT		= 1<<4,
 };
 
 #endif		/* MIGRATE_MODE_H_INCLUDED */
