@@ -48,6 +48,8 @@
 
 #include "internal.h"
 
+int mt_page_copy = 0;
+
 /*
  * migrate_prep() needs to be called before we start compiling a list of pages
  * to be migrated using isolate_lru_page(). If scheduling work on other CPUs is
@@ -617,6 +619,9 @@ static void copy_huge_page(struct page *dst, struct page *src,
 		BUG_ON(!PageTransHuge(src));
 		nr_pages = hpage_nr_pages(src);
 	}
+
+	if (mt_page_copy)
+		mode |= MIGRATE_MT;
 
 	if (mode & MIGRATE_MT)
 		rc = copy_pages_mthread(dst, src, nr_pages);
