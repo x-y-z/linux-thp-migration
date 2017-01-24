@@ -17,7 +17,6 @@
 #include <linux/pageblock-flags.h>
 #include <linux/page-flags-layout.h>
 #include <linux/atomic.h>
-#include <linux/jump_label.h>
 #include <asm/page.h>
 
 /* Free memory management - zoned buddy allocator.  */
@@ -79,7 +78,7 @@ extern char * const migratetype_names[MIGRATE_TYPES];
 	for (order = 0; order < MAX_ORDER; order++) \
 		for (type = 0; type < MIGRATE_TYPES; type++)
 
-extern struct static_key_false page_group_by_mobility_disabled;
+extern int page_group_by_mobility_disabled;
 
 #define NR_MIGRATETYPE_BITS (PB_migrate_end - PB_migrate + 1)
 #define MIGRATETYPE_MASK ((1UL << NR_MIGRATETYPE_BITS) - 1)
