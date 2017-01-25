@@ -114,8 +114,9 @@ int cxl_context_init(struct cxl_context *ctx, struct cxl_afu *afu, bool master,
 	return 0;
 }
 
-static int cxl_mmap_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static int cxl_mmap_fault(struct vm_fault *vmf)
 {
+	struct vm_area_struct *vma = vmf->vma;
 	struct cxl_context *ctx = vma->vm_file->private_data;
 	u64 area, offset;
 
