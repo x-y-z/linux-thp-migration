@@ -289,7 +289,7 @@ static int ext4_dax_fault(struct vm_fault *vmf)
 }
 
 static int
-ext4_dax_pmd_fault(struct vm_fault *vmf)
+ext4_dax_huge_fault(struct vm_fault *vmf)
 {
 	int result;
 	handle_t *handle = NULL;
@@ -310,7 +310,7 @@ ext4_dax_pmd_fault(struct vm_fault *vmf)
 	if (IS_ERR(handle))
 		result = VM_FAULT_SIGBUS;
 	else {
-		result = dax_iomap_pmd_fault(vmf, &ext4_iomap_ops);
+		result = dax_iomap_fault(vmf, &ext4_iomap_ops);
 	}
 
 	if (write) {
@@ -356,7 +356,7 @@ static int ext4_dax_pfn_mkwrite(struct vm_fault *vmf)
 
 static const struct vm_operations_struct ext4_dax_vm_ops = {
 	.fault		= ext4_dax_fault,
-	.pmd_fault	= ext4_dax_pmd_fault,
+	.huge_fault	= ext4_dax_fault,
 	.page_mkwrite	= ext4_dax_fault,
 	.pfn_mkwrite	= ext4_dax_pfn_mkwrite,
 };

@@ -1120,16 +1120,7 @@ dax_iomap_rw(struct kiocb *iocb, struct iov_iter *iter,
 }
 EXPORT_SYMBOL_GPL(dax_iomap_rw);
 
-/**
- * dax_iomap_fault - handle a page fault on a DAX file
- * @vmf: The description of the fault
- * @ops: iomap ops passed from the file system
- *
- * When a page fault occurs, filesystems may call this helper in their fault
- * or mkwrite handler for DAX files. Assumes the caller has done all the
- * necessary locking for the page fault to proceed successfully.
- */
-int dax_iomap_fault(struct vm_fault *vmf, struct iomap_ops *ops)
+static int dax_iomap_pte_fault(struct vm_fault *vmf, struct iomap_ops *ops)
 {
 	struct address_space *mapping = vmf->vma->vm_file->f_mapping;
 	struct inode *inode = mapping->host;
@@ -1248,7 +1239,6 @@ int dax_iomap_fault(struct vm_fault *vmf, struct iomap_ops *ops)
 	}
 	return VM_FAULT_NOPAGE | major;
 }
-EXPORT_SYMBOL_GPL(dax_iomap_fault);
 
 #ifdef CONFIG_FS_DAX_PMD
 /*
@@ -1339,7 +1329,7 @@ fallback:
 	return VM_FAULT_FALLBACK;
 }
 
-int dax_iomap_pmd_fault(struct vm_fault *vmf, struct iomap_ops *ops)
+static int dax_iomap_pmd_fault(struct vm_fault *vmf, struct iomap_ops *ops)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	struct address_space *mapping = vma->vm_file->f_mapping;
@@ -1443,5 +1433,32 @@ out:
 	trace_dax_pmd_fault_done(inode, vmf, max_pgoff, result);
 	return result;
 }
-EXPORT_SYMBOL_GPL(dax_iomap_pmd_fault);
+#else
+static int dax_iomap_pmd_fault(struct vm_fault *vmf, struct iomap_ops *ops)
+{
+	return VM_FAULT_FALLBACK;
+}
 #endif /* CONFIG_FS_DAX_PMD */
+
+/**
+ * dax_iomap_fault - handle a page fault on a DAX file
+ * @vmf: The description of the fault
+ * @ops: iomap ops passed from the file system
+ *
+ * When a page fault occurs, filesystems may call this helper in
+ * their fault handler for DAX files. dax_iomap_fault() assumes the caller
+ * has done all the necessary locking for page fault to proceed
+ * successfully.
+ */
+int dax_iomap_fault(struct vm_fault *vmf, struct iomap_ops *ops)
+{
+	switch (vmf->flags & FAULT_FLAG_SIZE_MASK) {
+	case FAULT_FLAG_SIZE_PTE:
+		return dax_iomap_pte_fault(vmf, ops);
+	case FAULT_FLAG_SIZE_PMD:
+		return dax_iomap_pmd_fault(vmf, ops);
+	default:
+		return VM_FAULT_FALLBACK;
+	}
+}
+EXPORT_SYMBOL_GPL(dax_iomap_fault);
