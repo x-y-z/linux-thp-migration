@@ -51,7 +51,8 @@ struct page_flags {
 	unsigned int page_swapcache:1;
 	unsigned int page_writeback:1;
 	unsigned int page_private:1;
-	unsigned int __pad:3;
+	unsigned int page_doublemap:1;
+	unsigned int __pad:2;
 };
 
 
@@ -127,20 +128,23 @@ static void exchange_huge_page(struct page *dst, struct page *src)
 static void exchange_page_flags(struct page *to_page, struct page *from_page)
 {
 	int from_cpupid, to_cpupid;
-	struct page_flags from_page_flags, to_page_flags;
+	struct page_flags from_page_flags = {0}, to_page_flags = {0};
 	struct mem_cgroup *to_memcg = page_memcg(to_page),
 					  *from_memcg = page_memcg(from_page);
 
 	from_cpupid = page_cpupid_xchg_last(from_page, -1);
 
-	from_page_flags.page_error = TestClearPageError(from_page);
+	from_page_flags.page_error = PageError(from_page);
+	if (from_page_flags.page_error)
+		ClearPageError(from_page);
 	from_page_flags.page_referenced = TestClearPageReferenced(from_page);
 	from_page_flags.page_uptodate = PageUptodate(from_page);
 	ClearPageUptodate(from_page);
 	from_page_flags.page_active = TestClearPageActive(from_page);
 	from_page_flags.page_unevictable = TestClearPageUnevictable(from_page);
 	from_page_flags.page_checked = PageChecked(from_page);
-	ClearPageChecked(from_page);
+	if (from_page_flags.page_checked)
+		ClearPageChecked(from_page);
 	from_page_flags.page_mappedtodisk = PageMappedToDisk(from_page);
 	ClearPageMappedToDisk(from_page);
 	from_page_flags.page_dirty = PageDirty(from_page);
@@ -150,18 +154,22 @@ static void exchange_page_flags(struct page *to_page, struct page *from_page)
 	clear_page_idle(from_page);
 	from_page_flags.page_swapcache = PageSwapCache(from_page);
 	from_page_flags.page_writeback = test_clear_page_writeback(from_page);
+	from_page_flags.page_doublemap = PageDoubleMap(from_page);
 
 
 	to_cpupid = page_cpupid_xchg_last(to_page, -1);
 
-	to_page_flags.page_error = TestClearPageError(to_page);
+	to_page_flags.page_error = PageError(to_page);
+	if (to_page_flags.page_error)
+		ClearPageError(to_page);
 	to_page_flags.page_referenced = TestClearPageReferenced(to_page);
 	to_page_flags.page_uptodate = PageUptodate(to_page);
 	ClearPageUptodate(to_page);
 	to_page_flags.page_active = TestClearPageActive(to_page);
 	to_page_flags.page_unevictable = TestClearPageUnevictable(to_page);
 	to_page_flags.page_checked = PageChecked(to_page);
-	ClearPageChecked(to_page);
+	if (to_page_flags.page_checked)
+		ClearPageChecked(to_page);
 	to_page_flags.page_mappedtodisk = PageMappedToDisk(to_page);
 	ClearPageMappedToDisk(to_page);
 	to_page_flags.page_dirty = PageDirty(to_page);
@@ -171,6 +179,7 @@ static void exchange_page_flags(struct page *to_page, struct page *from_page)
 	clear_page_idle(to_page);
 	to_page_flags.page_swapcache = PageSwapCache(to_page);
 	to_page_flags.page_writeback = test_clear_page_writeback(to_page);
+	to_page_flags.page_doublemap = PageDoubleMap(to_page);
 
 	/* set to_page */
 	if (from_page_flags.page_error)
@@ -197,6 +206,8 @@ static void exchange_page_flags(struct page *to_page, struct page *from_page)
 		set_page_young(to_page);
 	if (from_page_flags.page_is_idle)
 		set_page_idle(to_page);
+	if (from_page_flags.page_doublemap)
+		SetPageDoubleMap(to_page);
 
 	/* set from_page */
 	if (to_page_flags.page_error)
@@ -223,6 +234,8 @@ static void exchange_page_flags(struct page *to_page, struct page *from_page)
 		set_page_young(from_page);
 	if (to_page_flags.page_is_idle)
 		set_page_idle(from_page);
+	if (to_page_flags.page_doublemap)
+		SetPageDoubleMap(from_page);
 
 	/*
 	 * Copy NUMA information to the new page, to prevent over-eager
@@ -599,7 +612,6 @@ static int unmap_and_exchange(struct page *from_page, struct page *to_page,
 
 	from_index = from_page->index;
 	to_index = to_page->index;
-
 	/*
 	 * Corner case handling:
 	 * 1. When a new swap-cache page is read into, it is added to the LRU
@@ -673,8 +685,6 @@ out_unlock_both_remove_from_migration_pte:
 			swap(from_page->index, from_index);
 	}
 
-
-
 out_unlock_both:
 	if (to_anon_vma)
 		put_anon_vma(to_anon_vma);
@@ -687,6 +697,23 @@ out_unlock:
 out:
 
 	return rc;
+}
+
+static bool can_be_exchanged(struct page *from, struct page *to)
+{
+	if (PageCompound(from) != PageCompound(to))
+		return false;
+
+	if (PageHuge(from) != PageHuge(to))
+		return false;
+
+	if (PageHuge(from) || PageHuge(to))
+		return false;
+
+	if (compound_order(from) != compound_order(to))
+		return false;
+
+	return true;
 }
 
 /*
@@ -745,7 +772,8 @@ again:
 		}
 
 		/* TODO: compound page not supported */
-		if (PageCompound(from_page) || page_mapping(from_page)) {
+		if (!can_be_exchanged(from_page, to_page) ||
+		    page_mapping(from_page)) {
 			++failed;
 			goto putback;
 		}
@@ -784,6 +812,8 @@ static int unmap_pair_pages_concur(struct exchange_page_info *one_pair,
 	struct page *from_page = one_pair->from_page;
 	struct page *to_page = one_pair->to_page;
 
+	one_pair->from_index = from_page->index;
+	one_pair->to_index = to_page->index;
 	/* from_page lock down  */
 	if (!trylock_page(from_page)) {
 		if (!force || ((mode & MIGRATE_MODE_MASK) == MIGRATE_ASYNC))
@@ -903,7 +933,6 @@ static int exchange_page_mapping_concur(struct list_head *unmapped_list_ptr,
 					   struct list_head *exchange_list_ptr,
 						enum migrate_mode mode)
 {
-	int rc = -EBUSY;
 	int nr_failed = 0;
 	struct address_space *to_page_mapping, *from_page_mapping;
 	struct exchange_page_info *one_pair, *one_pair2;
@@ -911,6 +940,7 @@ static int exchange_page_mapping_concur(struct list_head *unmapped_list_ptr,
 	list_for_each_entry_safe(one_pair, one_pair2, unmapped_list_ptr, list) {
 		struct page *from_page = one_pair->from_page;
 		struct page *to_page = one_pair->to_page;
+		int rc = -EBUSY;
 
 		VM_BUG_ON_PAGE(!PageLocked(from_page), from_page);
 		VM_BUG_ON_PAGE(!PageLocked(to_page), to_page);
@@ -926,8 +956,9 @@ static int exchange_page_mapping_concur(struct list_head *unmapped_list_ptr,
 		BUG_ON(PageWriteback(to_page));
 
 		/* actual page mapping exchange */
-		rc = exchange_page_move_mapping(to_page_mapping, from_page_mapping,
-							to_page, from_page, NULL, NULL, mode, 0, 0);
+		if (!page_mapped(from_page) && !page_mapped(to_page))
+			rc = exchange_page_move_mapping(to_page_mapping, from_page_mapping,
+								to_page, from_page, NULL, NULL, mode, 0, 0);
 
 		if (rc) {
 			if (one_pair->from_page_was_mapped)
@@ -954,7 +985,7 @@ static int exchange_page_mapping_concur(struct list_head *unmapped_list_ptr,
 			one_pair->from_page = NULL;
 			one_pair->to_page = NULL;
 
-			list_move(&one_pair->list, exchange_list_ptr);
+			list_del(&one_pair->list);
 			++nr_failed;
 		}
 	}
@@ -1026,8 +1057,18 @@ static int remove_migration_ptes_concur(struct list_head *unmapped_list_ptr)
 	struct exchange_page_info *iterator;
 
 	list_for_each_entry(iterator, unmapped_list_ptr, list) {
-		remove_migration_ptes(iterator->from_page, iterator->to_page, false);
-		remove_migration_ptes(iterator->to_page, iterator->from_page, false);
+		struct page *from_page = iterator->from_page;
+		struct page *to_page = iterator->to_page;
+
+		swap(from_page->index, iterator->from_index);
+		if (iterator->from_page_was_mapped)
+			remove_migration_ptes(iterator->from_page, iterator->to_page, false);
+		swap(from_page->index, iterator->from_index);
+
+		swap(to_page->index, iterator->to_index);
+		if (iterator->to_page_was_mapped)
+			remove_migration_ptes(iterator->to_page, iterator->from_page, false);
+		swap(to_page->index, iterator->to_index);
 
 
 		if (iterator->from_anon_vma)
