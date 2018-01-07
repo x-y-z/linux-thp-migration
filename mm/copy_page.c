@@ -23,7 +23,7 @@
 #include <linux/freezer.h>
 
 
-const unsigned int limit_mt_num = 4;
+unsigned int limit_mt_num = 4;
 
 /* ======================== multi-threaded copy page ======================== */
 
