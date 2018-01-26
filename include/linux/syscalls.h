@@ -1203,6 +1203,11 @@ asmlinkage long sys_mmap_pgoff(unsigned long addr, unsigned long len,
 			unsigned long fd, unsigned long pgoff);
 asmlinkage long sys_old_mmap(struct mmap_arg_struct __user *arg);
 
+asmlinkage long sys_exchange_pages(pid_t pid, unsigned long nr_pages,
+				const void __user * __user *from_pages,
+				const void __user * __user *to_pages,
+				int __user *status,
+				int flags);
 
 /*
  * Not a real system call, but a placeholder for syscalls which are
