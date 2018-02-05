@@ -574,5 +574,7 @@ bool buffer_migrate_lock_buffers(struct buffer_head *head,
 int writeout(struct address_space *mapping, struct page *page);
 int expected_page_refs(struct address_space *mapping, struct page *page);
 
+int get_nodes(nodemask_t *nodes, const unsigned long __user *nmask,
+		     unsigned long maxnode);
 
 #endif	/* __MM_INTERNAL_H */
