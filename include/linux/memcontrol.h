@@ -130,6 +130,7 @@ struct mem_cgroup_per_node {
 	atomic_long_t		lruvec_stat[NR_VM_NODE_STAT_ITEMS];
 
 	unsigned long		lru_zone_size[MAX_NR_ZONES][NR_LRU_LISTS];
+	unsigned long		max_nr_base_pages;
 
 	struct mem_cgroup_reclaim_iter	iter[DEF_PRIORITY + 1];
 
