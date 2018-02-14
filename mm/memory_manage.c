@@ -254,7 +254,6 @@ static int do_mm_manage(struct task_struct *p, struct mm_struct *mm,
 				migrate_to_node(&to_base_page_list, from_nid, mode);
 #endif
 		}
-
 	}
 
 	if (migrate_mt || migrate_concur) {
