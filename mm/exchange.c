@@ -480,7 +480,7 @@ exchange_mappings:
 			 * with an IRQ-safe spinlock held. In the sync case, the buffers
 			 * need to be locked now
 			 */
-			if (mode != MIGRATE_ASYNC)
+			if ((mode & MIGRATE_MODE_MASK) != MIGRATE_ASYNC)
 				BUG_ON(!buffer_migrate_lock_buffers(to_head, mode));
 
 			ClearPagePrivate(to_page);
@@ -503,7 +503,7 @@ exchange_mappings:
 		} else if (!to_page_mapping->a_ops->migratepage) {
 			/* fallback_migrate_page  */
 			if (PageDirty(to_page)) {
-				if (mode != MIGRATE_SYNC)
+				if ((mode & MIGRATE_MODE_MASK) != MIGRATE_SYNC)
 					return -EBUSY;
 				return writeout(to_page_mapping, to_page);
 			}
@@ -571,13 +571,13 @@ static int unmap_and_exchange(struct page *from_page,
 	struct address_space *from_mapping, *to_mapping;
 
 	if (!trylock_page(from_page)) {
-		if (mode == MIGRATE_ASYNC)
+		if ((mode & MIGRATE_MODE_MASK) == MIGRATE_ASYNC)
 			goto out;
 		lock_page(from_page);
 	}
 
 	if (!trylock_page(to_page)) {
-		if (mode == MIGRATE_ASYNC)
+		if ((mode & MIGRATE_MODE_MASK) == MIGRATE_ASYNC)
 			goto out;
 		lock_page(to_page);
 	}
@@ -592,7 +592,7 @@ static int unmap_and_exchange(struct page *from_page,
 		 * the retry loop is too short and in the sync-light case,
 		 * the overhead of stalling is too much
 		 */
-		if (mode != MIGRATE_SYNC) {
+		if ((mode & MIGRATE_MODE_MASK) != MIGRATE_SYNC) {
 			rc = -EBUSY;
 			goto out_unlock;
 		}
@@ -890,7 +890,7 @@ static int unmap_pair_pages_concur(struct exchange_page_info *one_pair,
 
 	/* from_page lock down  */
 	if (!trylock_page(from_page)) {
-		if (!force || (mode & MIGRATE_ASYNC))
+		if (!force || ((mode & MIGRATE_MODE_MASK) == MIGRATE_ASYNC))
 			goto out;
 
 		lock_page(from_page);
@@ -918,7 +918,7 @@ static int unmap_pair_pages_concur(struct exchange_page_info *one_pair,
 
 	/* to_page lock down  */
 	if (!trylock_page(to_page)) {
-		if (!force || (mode & MIGRATE_ASYNC))
+		if (!force || ((mode & MIGRATE_MODE_MASK) == MIGRATE_ASYNC))
 			goto out_unlock;
 
 		lock_page(to_page);
