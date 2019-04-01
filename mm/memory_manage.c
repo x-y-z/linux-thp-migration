@@ -7,6 +7,7 @@
 #include <linux/mempolicy.h>
 #include <linux/memcontrol.h>
 #include <linux/migrate.h>
+#include <linux/exchange.h>
 #include <linux/mm_inline.h>
 #include <linux/nodemask.h>
 #include <linux/rmap.h>
@@ -253,6 +254,147 @@ static int putback_overflow_pages(unsigned long max_nr_base_pages,
 			huge_page_list, nr_huge_pages);
 }
 
+static int add_pages_to_exchange_list(struct list_head *from_pagelist,
+	struct list_head *to_pagelist, struct exchange_page_info *info_list,
+	struct list_head *exchange_list, unsigned long info_list_size)
+{
+	unsigned long info_list_index = 0;
+	LIST_HEAD(failed_from_list);
+	LIST_HEAD(failed_to_list);
+
+	while (!list_empty(from_pagelist) && !list_empty(to_pagelist)) {
+		struct page *from_page, *to_page;
+		struct exchange_page_info *one_pair = &info_list[info_list_index];
+		int rc;
+
+		from_page = list_first_entry_or_null(from_pagelist, struct page, lru);
+		to_page = list_first_entry_or_null(to_pagelist, struct page, lru);
+
+		if (!from_page || !to_page)
+			break;
+
+		if (!thp_migration_supported() && PageTransHuge(from_page)) {
+			lock_page(from_page);
+			rc = split_huge_page_to_list(from_page, &from_page->lru);
+			unlock_page(from_page);
+			if (rc) {
+				list_move(&from_page->lru, &failed_from_list);
+				continue;
+			}
+		}
+
+		if (!thp_migration_supported() && PageTransHuge(to_page)) {
+			lock_page(to_page);
+			rc = split_huge_page_to_list(to_page, &to_page->lru);
+			unlock_page(to_page);
+			if (rc) {
+				list_move(&to_page->lru, &failed_to_list);
+				continue;
+			}
+		}
+
+		if (hpage_nr_pages(from_page) != hpage_nr_pages(to_page)) {
+			if (!(hpage_nr_pages(from_page) == 1 && hpage_nr_pages(from_page) == HPAGE_PMD_NR)) {
+				list_del(&from_page->lru);
+				list_add(&from_page->lru, &failed_from_list);
+			}
+			if (!(hpage_nr_pages(to_page) == 1 && hpage_nr_pages(to_page) == HPAGE_PMD_NR)) {
+				list_del(&to_page->lru);
+				list_add(&to_page->lru, &failed_to_list);
+			}
+			continue;
+		}
+
+		/* Exclude file-backed pages, exchange it concurrently is not
+		 * implemented yet. */
+		if (page_mapping(from_page)) {
+			list_del(&from_page->lru);
+			list_add(&from_page->lru, &failed_from_list);
+			continue;
+		}
+		if (page_mapping(to_page)) {
+			list_del(&to_page->lru);
+			list_add(&to_page->lru, &failed_to_list);
+			continue;
+		}
+
+		list_del(&from_page->lru);
+		list_del(&to_page->lru);
+
+		one_pair->from_page = from_page;
+		one_pair->to_page = to_page;
+
+		list_add_tail(&one_pair->list, exchange_list);
+
+		info_list_index++;
+		if (info_list_index >= info_list_size)
+			break;
+	}
+	list_splice(&failed_from_list, from_pagelist);
+	list_splice(&failed_to_list, to_pagelist);
+
+	return info_list_index;
+}
+
+static unsigned long exchange_pages_between_nodes(unsigned long nr_from_pages,
+	unsigned long nr_to_pages, struct list_head *from_page_list,
+	struct list_head *to_page_list, int batch_size,
+	bool huge_page, enum migrate_mode mode)
+{
+	struct exchange_page_info *info_list;
+	unsigned long info_list_size = min_t(unsigned long,
+		nr_from_pages, nr_to_pages) / (huge_page?HPAGE_PMD_NR:1);
+	unsigned long added_size = 0;
+	bool migrate_concur = mode & MIGRATE_CONCUR;
+	LIST_HEAD(exchange_list);
+
+	/* non concurrent does not need to split into batches  */
+	if (!migrate_concur || batch_size <= 0)
+		batch_size = info_list_size;
+
+	/* prepare for huge page split  */
+	if (!thp_migration_supported() && huge_page) {
+		batch_size = batch_size * HPAGE_PMD_NR;
+		info_list_size = info_list_size * HPAGE_PMD_NR;
+	}
+
+	info_list = kvzalloc(sizeof(struct exchange_page_info)*batch_size,
+			GFP_KERNEL);
+	if (!info_list)
+		return 0;
+
+	while (!list_empty(from_page_list) && !list_empty(to_page_list)) {
+		unsigned long nr_added_pages;
+		INIT_LIST_HEAD(&exchange_list);
+
+		nr_added_pages = add_pages_to_exchange_list(from_page_list, to_page_list,
+			info_list, &exchange_list, batch_size);
+
+		/*
+		 * Nothing to exchange, we bail out.
+		 *
+		 * In case from_page_list and to_page_list both only have file-backed
+		 * pages left */
+		if (!nr_added_pages)
+			break;
+
+		added_size += nr_added_pages;
+
+		VM_BUG_ON(added_size > info_list_size);
+
+		if (migrate_concur)
+			exchange_pages_concur(&exchange_list, mode, MR_SYSCALL);
+		else
+			exchange_pages(&exchange_list, mode, MR_SYSCALL);
+
+		memset(info_list, 0, sizeof(struct exchange_page_info)*batch_size);
+	}
+
+	kvfree(info_list);
+
+	return info_list_size;
+}
+
 static int do_mm_manage(struct task_struct *p, struct mm_struct *mm,
 		const nodemask_t *slow, const nodemask_t *fast,
 		unsigned long nr_pages, int flags)
@@ -261,6 +403,7 @@ static int do_mm_manage(struct task_struct *p, struct mm_struct *mm,
 	bool migrate_concur = flags & MPOL_MF_MOVE_CONCUR;
 	bool migrate_dma = flags & MPOL_MF_MOVE_DMA;
 	bool move_hot_and_cold_pages = flags & MPOL_MF_MOVE_ALL;
+	bool migrate_exchange_pages = flags & MPOL_MF_EXCHANGE;
 	struct mem_cgroup *memcg = mem_cgroup_from_task(p);
 	int err = 0;
 	unsigned long nr_isolated_slow_pages;
@@ -338,6 +481,35 @@ static int do_mm_manage(struct task_struct *p, struct mm_struct *mm,
 			&nr_isolated_fast_base_pages, &nr_isolated_fast_huge_pages,
 			move_hot_and_cold_pages?ISOLATE_HOT_AND_COLD_PAGES:ISOLATE_COLD_PAGES);
 
+		if (migrate_exchange_pages) {
+			unsigned long nr_exchange_pages;
+
+			/*
+			 * base pages can include file-backed ones, we do not handle them
+			 * at the moment
+			 */
+			if (!thp_migration_supported()) {
+				nr_exchange_pages =  exchange_pages_between_nodes(nr_isolated_slow_base_pages,
+					nr_isolated_fast_base_pages, &slow_base_page_list,
+					&fast_base_page_list, migration_batch_size, false, mode);
+
+				nr_isolated_fast_base_pages -= nr_exchange_pages;
+			}
+
+			/* THP page exchange */
+			nr_exchange_pages =  exchange_pages_between_nodes(nr_isolated_slow_huge_pages,
+				nr_isolated_fast_huge_pages, &slow_huge_page_list,
+				&fast_huge_page_list, migration_batch_size, true, mode);
+
+			/* split THP above, so we do not need to multiply the counter */
+			if (!thp_migration_supported())
+				nr_isolated_fast_huge_pages -= nr_exchange_pages;
+			else
+				nr_isolated_fast_huge_pages -= nr_exchange_pages * HPAGE_PMD_NR;
+
+			goto migrate_out;
+		} else {
+migrate_out:
 		/* Migrate pages to slow node */
 		/* No multi-threaded migration for base pages */
 		nr_isolated_fast_base_pages -=
@@ -347,6 +519,7 @@ static int do_mm_manage(struct task_struct *p, struct mm_struct *mm,
 		nr_isolated_fast_huge_pages -=
 			migrate_to_node(&fast_huge_page_list, slow_nid, mode,
 				migration_batch_size);
+		}
 	}
 
 	if (nr_isolated_fast_base_pages != ULONG_MAX &&
