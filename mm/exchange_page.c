@@ -126,7 +126,6 @@ int exchange_page_lists_mthread(struct page **to, struct page **from, int nr_pag
 	int to_node = page_to_nid(*to);
 	int i;
 	struct copy_page_info *work_items;
-	int nr_pages_per_page = hpage_nr_pages(*from);
 	const struct cpumask *per_node_cpumask = cpumask_of_node(to_node);
 	int cpu_id_list[32] = {0};
 	int cpu;

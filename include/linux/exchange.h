@@ -20,4 +20,6 @@ struct exchange_page_info {
 int exchange_pages(struct list_head *exchange_list,
 			enum migrate_mode mode,
 			int reason);
+int exchange_pages_concur(struct list_head *exchange_list,
+		enum migrate_mode mode, int reason);
 #endif /* _LINUX_EXCHANGE_H */
