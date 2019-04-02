@@ -345,11 +345,16 @@ static int exchange_from_to_pages(struct page *to_page, struct page *from_page,
 
 	rc = -EFAULT;
 
-	if (PageHuge(from_page) || PageTransHuge(from_page))
-		exchange_huge_page(to_page, from_page);
-	else
-		exchange_highpage(to_page, from_page);
-	rc = 0;
+	if (mode & MIGRATE_MT)
+		rc = exchange_page_mthread(to_page, from_page,
+				hpage_nr_pages(from_page));
+	if (rc) {
+		if (PageHuge(from_page) || PageTransHuge(from_page))
+			exchange_huge_page(to_page, from_page);
+		else
+			exchange_highpage(to_page, from_page);
+		rc = 0;
+	}
 
 	exchange_page_flags(to_page, from_page);
 
