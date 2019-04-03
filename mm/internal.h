@@ -564,7 +564,7 @@ extern int copy_page_lists_mt(struct page **to,
 extern int exchange_page_mthread(struct page *to, struct page *from,
 			int nr_pages);
 extern int exchange_page_lists_mthread(struct page **to,
-						  struct page **from, 
+						  struct page **from,
 						  int nr_pages);
 
 extern int exchange_two_pages(struct page *page1, struct page *page2);
@@ -576,5 +576,96 @@ int expected_page_refs(struct address_space *mapping, struct page *page);
 
 int get_nodes(nodemask_t *nodes, const unsigned long __user *nmask,
 		     unsigned long maxnode);
+
+unsigned move_active_pages_to_lru(struct lruvec *lruvec,
+				     struct list_head *list,
+				     struct list_head *pages_to_free,
+				     enum lru_list lru);
+void putback_inactive_pages(struct lruvec *lruvec, struct list_head *page_list);
+
+struct scan_control {
+	/* How many pages shrink_list() should reclaim */
+	unsigned long nr_to_reclaim;
+
+	/*
+	 * Nodemask of nodes allowed by the caller. If NULL, all nodes
+	 * are scanned.
+	 */
+	nodemask_t	*nodemask;
+
+	/*
+	 * The memory cgroup that hit its limit and as a result is the
+	 * primary target of this reclaim invocation.
+	 */
+	struct mem_cgroup *target_mem_cgroup;
+
+	/* Writepage batching in laptop mode; RECLAIM_WRITE */
+	unsigned int may_writepage:1;
+
+	/* Can mapped pages be reclaimed? */
+	unsigned int may_unmap:1;
+
+	/* Can pages be swapped as part of reclaim? */
+	unsigned int may_swap:1;
+
+	/* e.g. boosted watermark reclaim leaves slabs alone */
+	unsigned int may_shrinkslab:1;
+
+	/*
+	 * Cgroups are not reclaimed below their configured memory.low,
+	 * unless we threaten to OOM. If any cgroups are skipped due to
+	 * memory.low and nothing was reclaimed, go back for memory.low.
+	 */
+	unsigned int memcg_low_reclaim:1;
+	unsigned int memcg_low_skipped:1;
+
+	unsigned int hibernation_mode:1;
+
+	/* One of the zones is ready for compaction */
+	unsigned int compaction_ready:1;
+
+	unsigned int isolate_only_huge_page:1;
+	unsigned int isolate_only_base_page:1;
+	unsigned int no_reclaim:1;
+
+	/* Allocation order */
+	s8 order;
+
+	/* Scan (total_size >> priority) pages at once */
+	s8 priority;
+
+	/* The highest zone to isolate pages for reclaim from */
+	s8 reclaim_idx;
+
+	/* This context's GFP mask */
+	gfp_t gfp_mask;
+
+	/* Incremented by the number of inactive pages that were scanned */
+	unsigned long nr_scanned;
+
+	/* Number of pages freed so far during a call to shrink_zones() */
+	unsigned long nr_reclaimed;
+
+	struct {
+		unsigned int dirty;
+		unsigned int unqueued_dirty;
+		unsigned int congested;
+		unsigned int writeback;
+		unsigned int immediate;
+		unsigned int file_taken;
+		unsigned int taken;
+	} nr;
+};
+
+unsigned long isolate_lru_pages(unsigned long nr_to_scan,
+		struct lruvec *lruvec, struct list_head *dst,
+		unsigned long *nr_scanned, struct scan_control *sc,
+		enum lru_list lru);
+void shrink_active_list(unsigned long nr_to_scan,
+			       struct lruvec *lruvec,
+			       struct scan_control *sc,
+			       enum lru_list lru);
+unsigned long shrink_inactive_list(unsigned long nr_to_scan, struct lruvec *lruvec,
+		     struct scan_control *sc, enum lru_list lru);
 
 #endif	/* __MM_INTERNAL_H */
